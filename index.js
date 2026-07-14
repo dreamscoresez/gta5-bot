@@ -179,46 +179,51 @@ client.on('interactionCreate', async i => {
         }
 
         if (i.isModalSubmit() && i.customId === 'm') {
-            const name = i.fields.getTextInputValue('n').trim();
-            const nicksStr = i.fields.getTextInputValue('nicknames').trim();
-            const billsStr = i.fields.getTextInputValue('bills').trim();
-            const timeStr = i.fields.getTextInputValue('time').trim();
-
-            const nameNickRegex = /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/;
-            const billRegex = /^\d+(;\d+)*$/;
-            const timeRegex = /^\d{2}:\d{2}$/;
-
-            if (!nameNickRegex.test(name) || !nameNicknamesCheck(nicksStr) || !billRegex.test(billsStr) || !timeRegex.test(timeStr)) {
-                return i.reply({ content: '❌ Ошибка синтаксиса! Проверьте данные.', flags: [MessageFlags.Ephemeral] });
-            }
-
-            function NicknamesCheck(str) { return /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(str); }
-
             await i.deferReply({ flags: [MessageFlags.Ephemeral] });
-            const [h, m] = i.fields.getTextInputValue('time').split(':').map(Number);
-            const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
-            const nicks = i.fields.getTextInputValue('nicknames').split(';');
-            const bills = i.fields.getTextInputValue('bills').split(';');
+            try {
+                const name = i.fields.getTextInputValue('n').trim();
+                const nicksStr = i.fields.getTextInputValue('nicknames').trim();
+                const billsStr = i.fields.getTextInputValue('bills').trim();
+                const timeStr = i.fields.getTextInputValue('time').trim();
 
-            const embed = new EmbedBuilder().setTitle(i.fields.getTextInputValue('n')).setColor(0x0099FF);
-            nicks.forEach((n, idx) => embed.addFields({ name: n.trim(), value: `Векселей: ${parseInt(bills[idx]?.trim()) || 0}`, inline: false }));
-            embed.addFields(
-                { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
-                { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false }
-            );
+                const nameNickRegex = /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/;
+                const billRegex = /^\d+(;\d+)*$/;
+                const timeRegex = /^\d{2}:\d{2}$/;
 
-            const processChannel = await client.channels.fetch(CONFIG.PROCESS);
-            const msg = await processChannel.send({
-                content: `Контракт взял: <@${i.user.id}>`,
-                embeds: [embed],
-                components: [new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger)
-                )]
-            });
+                function NicknamesCheck(str) { return /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(str); }
 
-            setupTimer(msg.channel, i.user.id, endTime);
-            await i.editReply('✅ Контракт успешно создан!');
+                if (!nameNickRegex.test(name) || !NicknamesCheck(nicksStr) || !billRegex.test(billsStr) || !timeRegex.test(timeStr)) {
+                    return i.editReply({ content: '❌ Ошибка синтаксиса! Проверьте данные:\n- Ники: текст через ;\n- Векселя: цифры через ;\n- Время: ЧЧ:ММ' });
+                }
+
+                const [h, m] = timeStr.split(':').map(Number);
+                const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
+                const nicks = nicksStr.split(';');
+                const bills = billsStr.split(';');
+
+                const embed = new EmbedBuilder().setTitle(name).setColor(0x0099FF);
+                nicks.forEach((n, idx) => embed.addFields({ name: n.trim(), value: `Векселей: ${parseInt(bills[idx]?.trim()) || 0}`, inline: false }));
+                embed.addFields(
+                    { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
+                    { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false }
+                );
+
+                const processChannel = await client.channels.fetch(CONFIG.PROCESS);
+                const msg = await processChannel.send({
+                    content: `Контракт взял: <@${i.user.id}>`,
+                    embeds: [embed],
+                    components: [new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger)
+                    )]
+                });
+
+                setupTimer(msg.channel, i.user.id, endTime);
+                await i.editReply('✅ Контракт успешно создан!');
+            } catch (err) {
+                console.error('Ошибка модалки:', err);
+                await i.editReply('❌ Произошла ошибка при создании контракта.');
+            }
         }
 
     } catch (err) { console.error('Ошибка:', err); }
