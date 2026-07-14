@@ -69,7 +69,7 @@ client.on('messageCreate', async msg => {
                 db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
             }
 
-            await pendingMsg.edit({ content: `✅ **Оплата подтверждена ${msg.author.username}!**`, components: [] });
+            await pendingMsg.edit({ content: `✅ **Оплата подтверждена ${msg.author.id}!**`, components: [] });
             await msg.reply('✅ Контракт успешно закрыт, долги обновлены.');
         } else {
             await msg.reply('❌ Нет активных оплат в статусе ожидания.');
