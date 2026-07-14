@@ -16,7 +16,7 @@ const CONFIG = {
     PICK: process.env.PICK,
     PROCESS: process.env.PROCESS,
     PAY: process.env.PAY,
-    ROLE_ID: process.env.ROLE_ID
+    ALLOWED_ROLES: process.env.ALLOWED_ROLES ? process.env.ALLOWED_ROLES.split(',') : []
 };
 
 const setupTimer = async (channel, creatorId, endTime) => {
@@ -51,13 +51,13 @@ client.on('messageCreate', async msg => {
     }
 
     if (msg.channel.id === CONFIG.PAY && msg.content.toLowerCase().trim() === '!подтвердить') {
-        if (!msg.member.roles.cache.has(CONFIG.ROLE_ID)) return await msg.reply('❌ Ошибка! У вас нет прав проверяющего.');
+        const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+        if (!hasRole) return await msg.reply('❌ Ошибка! У вас нет прав проверяющего.');
 
         const channelMessages = await msg.channel.messages.fetch({ limit: 20 });
         const pendingMsg = channelMessages.find(m => m.author.id === client.user.id && m.content.includes('⏳ **Ожидание подтверждения...**'));
 
         if (pendingMsg) {
-            // ИСПРАВЛЕНИЕ: Логика списания долгов при подтверждении
             const embed = pendingMsg.embeds[0];
             if (embed) {
                 embed.fields.forEach(field => {
@@ -114,8 +114,16 @@ client.on('interactionCreate', async i => {
             }
 
             if (i.customId === 'succ' || i.customId === 'fail') {
-                await i.deferUpdate();
                 const oldEmbed = i.message.embeds[0];
+                const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
+                const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
+                const endTime = parseInt(timestampMatch[1]) * 1000;
+
+                if (Date.now() < endTime) {
+                    return i.reply({ content: '❌ Рано! Контракт еще не завершен.', flags: [MessageFlags.Ephemeral] });
+                }
+
+                await i.deferUpdate();
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const multiplier = participants.length < 2 ? 0.4 : 0.2;
                 const payEmbed = new EmbedBuilder().setTitle(oldEmbed.title).setColor(0x00FF00).setDescription('**Детали оплаты:**');
