@@ -127,14 +127,12 @@ client.on('interactionCreate', async i => {
 
                 await i.deferUpdate();
 
-                // Вытаскиваем ID автора пика из текста сообщения ("Контракт взял: <@123456789>")
                 const creatorMatch = i.message.content.match(/<@(\d+)>/);
                 const creatorId = creatorMatch ? creatorMatch[1] : null;
 
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const isSuccess = i.customId === 'succ';
 
-                // Успех: 2+ чел = 20%, <2 = 40% | Провал: 2+ чел = 30%, <2 = 50%
                 const multiplier = isSuccess
                     ? (participants.length < 2 ? 0.4 : 0.2)
                     : (participants.length < 2 ? 0.5 : 0.3);
@@ -159,7 +157,6 @@ client.on('interactionCreate', async i => {
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
                     await payChannel.send({
-                        // Тегаем автора пика если удалось достать его ID
                         content: `🔔 **Оплата по контракту**${creatorId ? ` — <@${creatorId}>` : ''}`,
                         embeds: [payEmbed],
                         components: [new ActionRowBuilder().addComponents(
@@ -182,6 +179,21 @@ client.on('interactionCreate', async i => {
         }
 
         if (i.isModalSubmit() && i.customId === 'm') {
+            const name = i.fields.getTextInputValue('n').trim();
+            const nicksStr = i.fields.getTextInputValue('nicknames').trim();
+            const billsStr = i.fields.getTextInputValue('bills').trim();
+            const timeStr = i.fields.getTextInputValue('time').trim();
+
+            const nameNickRegex = /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/;
+            const billRegex = /^\d+(;\d+)*$/;
+            const timeRegex = /^\d{2}:\d{2}$/;
+
+            if (!nameNickRegex.test(name) || !nameNicknamesCheck(nicksStr) || !billRegex.test(billsStr) || !timeRegex.test(timeStr)) {
+                return i.reply({ content: '❌ Ошибка синтаксиса! Проверьте данные.', flags: [MessageFlags.Ephemeral] });
+            }
+
+            function NicknamesCheck(str) { return /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(str); }
+
             await i.deferReply({ flags: [MessageFlags.Ephemeral] });
             const [h, m] = i.fields.getTextInputValue('time').split(':').map(Number);
             const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
@@ -189,7 +201,7 @@ client.on('interactionCreate', async i => {
             const bills = i.fields.getTextInputValue('bills').split(';');
 
             const embed = new EmbedBuilder().setTitle(i.fields.getTextInputValue('n')).setColor(0x0099FF);
-            nicks.forEach((n, idx) => embed.addFields({ name: n.trim(), value: `Векселей: ${bills[idx]?.trim() || 0}`, inline: false }));
+            nicks.forEach((n, idx) => embed.addFields({ name: n.trim(), value: `Векселей: ${parseInt(bills[idx]?.trim()) || 0}`, inline: false }));
             embed.addFields(
                 { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
                 { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false }
