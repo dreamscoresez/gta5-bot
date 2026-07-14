@@ -22,7 +22,7 @@ const CONFIG = {
 const setupTimer = async (channel, creatorId, endTime) => {
     const remaining = endTime - Date.now();
     setTimeout(async () => {
-        try { await channel.send(`⚠️ **ВРЕМЯ ВЫШЛО!** <@${creatorId}>, проверьте и закройте контракт!`); } 
+        try { await channel.send(`⚠️ **ВРЕМЯ ВЫШЛО!** <@${creatorId}>, проверьте и закройте контракт!`); }
         catch (err) { console.error('Ошибка таймера:', err); }
     }, Math.max(0, remaining));
 };
@@ -69,7 +69,7 @@ client.on('messageCreate', async msg => {
                 db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
             }
 
-            await pendingMsg.edit({ content: `✅ **Оплата подтверждена ${msg.author.id}!**`, components: [] });
+            await pendingMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
             await msg.reply('✅ Контракт успешно закрыт, долги обновлены.');
         } else {
             await msg.reply('❌ Нет активных оплат в статусе ожидания.');
@@ -85,10 +85,10 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: `💰 Баланс: **${(row?.balance || 0).toLocaleString()} $**`, flags: [MessageFlags.Ephemeral] });
             }
             if (['пополнить', 'вычесть', 'долг_добавить', 'оплачено'].includes(i.commandName)) {
-                if(i.commandName === 'пополнить') db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(i.options.getInteger('сумма'));
-                if(i.commandName === 'вычесть') db.prepare('UPDATE treasury SET balance = balance - ? WHERE id = 1').run(i.options.getInteger('сумма'));
-                if(i.commandName === 'долг_добавить') db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, ?)').run(i.options.getString('ник'), i.options.getInteger('сумма'));
-                if(i.commandName === 'оплачено') {
+                if (i.commandName === 'пополнить') db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(i.options.getInteger('сумма'));
+                if (i.commandName === 'вычесть') db.prepare('UPDATE treasury SET balance = balance - ? WHERE id = 1').run(i.options.getInteger('сумма'));
+                if (i.commandName === 'долг_добавить') db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, ?)').run(i.options.getString('ник'), i.options.getInteger('сумма'));
+                if (i.commandName === 'оплачено') {
                     db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(i.options.getInteger('сумма'), i.options.getString('ник'));
                     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
                 }
@@ -99,7 +99,9 @@ client.on('interactionCreate', async i => {
                 const text = debtors.length ? debtors.map(d => `• **${d.name}**: ${d.amount.toLocaleString()}$`).join('\n') : 'Должников нет.';
                 return i.reply({ content: `📋 **Должники:**\n${text}`, flags: [MessageFlags.Ephemeral] });
             }
-            if (i.commandName === 'вызвать') return i.reply({ components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] });
+            if (i.commandName === 'вызвать') {
+                return i.reply({ components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] });
+            }
         }
 
         if (i.isButton()) {
@@ -120,27 +122,62 @@ client.on('interactionCreate', async i => {
                 const endTime = parseInt(timestampMatch[1]) * 1000;
 
                 if (Date.now() < endTime) {
-                    return i.reply({ content: '❌ Рано! Контракт еще не завершен.', flags: [MessageFlags.Ephemeral] });
+                    return i.reply({ content: '❌ Рано! Контракт ещё не завершён.', flags: [MessageFlags.Ephemeral] });
                 }
 
                 await i.deferUpdate();
+
+                // Вытаскиваем ID автора пика из текста сообщения ("Контракт взял: <@123456789>")
+                const creatorMatch = i.message.content.match(/<@(\d+)>/);
+                const creatorId = creatorMatch ? creatorMatch[1] : null;
+
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
-                const multiplier = participants.length < 2 ? 0.4 : 0.2;
-                const payEmbed = new EmbedBuilder().setTitle(oldEmbed.title).setColor(0x00FF00).setDescription('**Детали оплаты:**');
+                const isSuccess = i.customId === 'succ';
+
+                // Успех: 2+ чел = 20%, <2 = 40% | Провал: 2+ чел = 30%, <2 = 50%
+                const multiplier = isSuccess
+                    ? (participants.length < 2 ? 0.4 : 0.2)
+                    : (participants.length < 2 ? 0.5 : 0.3);
+
+                const payEmbed = new EmbedBuilder()
+                    .setTitle(oldEmbed.title)
+                    .setColor(isSuccess ? 0x00FF00 : 0xFF0000)
+                    .setDescription(isSuccess ? '**Детали оплаты (Успех):**' : '**Детали оплаты (Провал - Штраф):**');
+
                 participants.forEach(f => {
                     const toPay = (parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier;
                     db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)').run(f.name, f.name, toPay);
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $`, inline: false });
                 });
-                await i.message.edit({ content: `✅ Статус: **${i.customId === 'succ' ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`, components: [], embeds: [EmbedBuilder.from(oldEmbed).setColor(i.customId === 'succ' ? 0x00FF00 : 0xFF0000)] });
+
+                await i.message.edit({
+                    content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                    components: [],
+                    embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                });
+
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
-                if (payChannel) await payChannel.send({ content: `🔔 **Оплата по контракту**`, embeds: [payEmbed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success))] });
+                if (payChannel) {
+                    await payChannel.send({
+                        // Тегаем автора пика если удалось достать его ID
+                        content: `🔔 **Оплата по контракту**${creatorId ? ` — <@${creatorId}>` : ''}`,
+                        embeds: [payEmbed],
+                        components: [new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
+                        )]
+                    });
+                }
             }
 
             if (i.customId === 'pay_confirm') {
                 const messages = await i.channel.messages.fetch({ limit: 10 });
-                if (!messages.some(msg => msg.attachments.size > 0)) return i.reply({ content: '❌ Ошибка! Сначала прикрепите скриншот.', flags: [MessageFlags.Ephemeral] });
-                await i.update({ content: `⏳ **Ожидание подтверждения...**\nОплата от <@${i.user.id}>. Проверяющий, введите \`!подтвердить\` для завершения.`, components: [] });
+                if (!messages.some(msg => msg.attachments.size > 0)) {
+                    return i.reply({ content: '❌ Ошибка! Сначала прикрепите скриншот.', flags: [MessageFlags.Ephemeral] });
+                }
+                await i.update({
+                    content: `⏳ **Ожидание подтверждения...**\nОплата от <@${i.user.id}>. Проверяющий, введите \`!подтвердить\` для завершения.`,
+                    components: []
+                });
             }
         }
 
@@ -150,14 +187,28 @@ client.on('interactionCreate', async i => {
             const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
             const nicks = i.fields.getTextInputValue('nicknames').split(';');
             const bills = i.fields.getTextInputValue('bills').split(';');
+
             const embed = new EmbedBuilder().setTitle(i.fields.getTextInputValue('n')).setColor(0x0099FF);
             nicks.forEach((n, idx) => embed.addFields({ name: n.trim(), value: `Векселей: ${bills[idx]?.trim() || 0}`, inline: false }));
-            embed.addFields({ name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false }, { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false });
+            embed.addFields(
+                { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
+                { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false }
+            );
+
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
-            const msg = await processChannel.send({ content: `Контракт взял: <@${i.user.id}>`, embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger))] });
+            const msg = await processChannel.send({
+                content: `Контракт взял: <@${i.user.id}>`,
+                embeds: [embed],
+                components: [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger)
+                )]
+            });
+
             setupTimer(msg.channel, i.user.id, endTime);
             await i.editReply('✅ Контракт успешно создан!');
         }
+
     } catch (err) { console.error('Ошибка:', err); }
 });
 
