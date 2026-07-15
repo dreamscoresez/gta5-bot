@@ -7,11 +7,6 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 process.on('unhandledRejection', error => { console.error('Unhandled rejection:', error); });
 process.on('uncaughtException', err => { console.error('Uncaught exception:', err); });
 
-db.prepare('CREATE TABLE IF NOT EXISTS debtors (name TEXT PRIMARY KEY, amount INTEGER)').run();
-db.prepare('CREATE TABLE IF NOT EXISTS treasury (id INTEGER PRIMARY KEY, balance INTEGER)').run();
-db.prepare('CREATE TABLE IF NOT EXISTS active_contracts (msgId TEXT PRIMARY KEY, creatorId TEXT, endTime INTEGER, channelId TEXT)').run();
-db.prepare('INSERT OR IGNORE INTO treasury (id, balance) VALUES (1, 0)').run();
-
 const CONFIG = {
     PICK: process.env.PICK,
     PROCESS: process.env.PROCESS,
@@ -42,34 +37,20 @@ client.once('ready', async () => {
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     console.log(`🚀 Бот ${client.user.tag} запущен!`);
 
-    // Восстанавливаем таймеры после рестарта
     const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
     console.log(`🔍 Найдено активных контрактов в БД: ${activeContracts.length}`);
 
     for (const contract of activeContracts) {
         try {
-            console.log(`🛠 Попытка восстановления: ${contract.msgId}, канал: ${contract.channelId}`);
-            
-            // Если контракт уже просрочен — сразу пишем в канал
             if (Date.now() >= contract.endTime) {
                 const channel = await client.channels.fetch(contract.channelId);
-                await channel.send(`⚠️ **ВРЕМЯ КОНТРАКТА ВЫШЛО (пока бот был оффлайн)!** <@${contract.creatorId}>, проверьте и закройте его.`);
+                await channel.send(`⚠️ **ВРЕМЯ КОНТРАКТА ВЫШЛО!** <@${contract.creatorId}>, проверьте и закройте его.`);
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
-                console.log(`✅ Контракт ${contract.msgId} был просрочен, уведомление отправлено.`);
             } else {
-                // Если время еще есть — запускаем таймер
                 const channel = await client.channels.fetch(contract.channelId);
                 setupTimer(channel, contract.creatorId, contract.endTime);
-                console.log(`✅ Таймер восстановлен для контракта ${contract.msgId}`);
             }
-        } catch (err) {
-            console.error(`❌ Ошибка при восстановлении контракта ${contract.msgId}:`, err);
-            // Если канал не найден — возможно, он удален, можно удалить запись из БД
-            if (err.code === 10003) { 
-                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
-                console.log(`🗑 Удалена запись о контракте ${contract.msgId} (канал не найден).`);
-            }
-        }
+        } catch (err) { console.error(`Ошибка восстановления ${contract.msgId}:`, err); }
     }
 });
 
@@ -136,13 +117,10 @@ client.on('interactionCreate', async i => {
             }
             if (i.commandName === 'вызвать') {
                 return i.reply({ 
-                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\nВы пикаете контракты в игре, после этого нажимаете на кнопку ниже, у вас открывается панель в которой вы вписываете данные для контракта который вы пикнули в игре.\nЗа всеми вопросами обращаться к <@702529657718833162>", 
+                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\nЗа всеми вопросами обращаться к <@702529657718833162>", 
                     components: [
                         new ActionRowBuilder().addComponents(
-                            new ButtonBuilder()
-                                .setCustomId('start')
-                                .setLabel('Создать контракт')
-                                .setStyle(ButtonStyle.Primary)
+                            new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary)
                         )
                     ] 
                 });
@@ -166,22 +144,16 @@ client.on('interactionCreate', async i => {
                 const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
                 const endTime = parseInt(timestampMatch[1]) * 1000;
 
-                if (Date.now() < endTime) {
-                    return i.reply({ content: '❌ Рано! Контракт ещё не завершён.', flags: [MessageFlags.Ephemeral] });
-                }
+                if (Date.now() < endTime) return i.reply({ content: '❌ Рано! Контракт ещё не завершён.', flags: [MessageFlags.Ephemeral] });
 
                 await i.deferUpdate();
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
 
                 const creatorMatch = i.message.content.match(/<@(\d+)>/);
                 const creatorId = creatorMatch ? creatorMatch[1] : null;
-
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const isSuccess = i.customId === 'succ';
-
-                const multiplier = isSuccess
-                    ? (participants.length < 2 ? 0.4 : 0.2)
-                    : (participants.length < 2 ? 0.5 : 0.3);
+                const multiplier = isSuccess ? (participants.length < 2 ? 0.4 : 0.2) : (participants.length < 2 ? 0.5 : 0.3);
 
                 const payEmbed = new EmbedBuilder()
                     .setTitle(oldEmbed.title)
@@ -205,18 +177,14 @@ client.on('interactionCreate', async i => {
                     await payChannel.send({
                         content: `🔔 **Оплата по контракту**${creatorId ? ` — <@${creatorId}>` : ''}`,
                         embeds: [payEmbed],
-                        components: [new ActionRowBuilder().addComponents(
-                            new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
-                        )]
+                        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success))]
                     });
                 }
             }
 
             if (i.customId === 'pay_confirm') {
                 const messages = await i.channel.messages.fetch({ limit: 10 });
-                if (!messages.some(msg => msg.attachments.size > 0)) {
-                    return i.reply({ content: '❌ Ошибка! Сначала прикрепите скриншот.', flags: [MessageFlags.Ephemeral] });
-                }
+                if (!messages.some(msg => msg.attachments.size > 0)) return i.reply({ content: '❌ Ошибка! Сначала прикрепите скриншот.', flags: [MessageFlags.Ephemeral] });
                 await i.update({
                     content: `⏳ **Ожидание подтверждения...**\nОплата от <@${i.user.id}>. Проверяющий, введите \`!подтвердить\` для завершения.`,
                     components: []
@@ -232,14 +200,8 @@ client.on('interactionCreate', async i => {
                 const billsStr = i.fields.getTextInputValue('bills').trim();
                 const timeStr = i.fields.getTextInputValue('time').trim();
 
-                const nameNickRegex = /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/;
-                const billRegex = /^\d+(;\d+)*$/;
-                const timeRegex = /^\d{2}:\d{2}$/;
-
-                function NicknamesCheck(str) { return /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(str); }
-
-                if (!nameNickRegex.test(name) || !NicknamesCheck(nicksStr) || !billRegex.test(billsStr) || !timeRegex.test(timeStr)) {
-                    return i.editReply({ content: '❌ Ошибка синтаксиса! Проверьте данные:\n- Ники: текст через ; (без _-/ между именем и фамилией, а так же без пробела между фамилией и следующим ником(Artem Minoru;Kimito Minoru))\n- Векселя: цифры через ;\n- Время: ЧЧ:ММ' });
+                if (!/^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(name) || !/^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(nicksStr) || !/^\d+(;\d+)*$/.test(billsStr) || !/^\d{2}:\d{2}$/.test(timeStr)) {
+                    return i.editReply({ content: '❌ Ошибка синтаксиса! Проверьте данные (Ники, Векселя, Время).' });
                 }
 
                 const [h, m] = timeStr.split(':').map(Number);
@@ -264,9 +226,7 @@ client.on('interactionCreate', async i => {
                     )]
                 });
 
-                db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)')
-                  .run(msg.id, i.user.id, endTime, msg.channelId);
-
+                db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
                 setupTimer(msg.channel, i.user.id, endTime);
                 await i.editReply('✅ Контракт успешно создан!');
             } catch (err) {
@@ -274,12 +234,15 @@ client.on('interactionCreate', async i => {
                 await i.editReply('❌ Произошла ошибка при создании контракта.');
             }
         }
-
     } catch (err) { console.error('Ошибка:', err); }
 });
 
 const shutdown = () => {
-    console.log('🛑 Выключение бота...');
+    console.log('🛑 Бот выключается, сохраняем базу данных...');
+    try {
+        db.close(); 
+        console.log('✅ База данных успешно закрыта.');
+    } catch (err) { console.error('Ошибка при закрытии БД:', err); }
     client.destroy();
     process.exit(0);
 };
