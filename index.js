@@ -118,7 +118,17 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: `📋 **Должники:**\n${text}`, flags: [MessageFlags.Ephemeral] });
             }
             if (i.commandName === 'вызвать') {
-                return i.reply({ components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] });
+                return i.reply({ 
+                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\nНажмите кнопку ниже, чтобы создать новый контракт.", 
+                    components: [
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId('start')
+                                .setLabel('Создать контракт')
+                                .setStyle(ButtonStyle.Primary)
+                        )
+                    ] 
+                });
             }
         }
 
