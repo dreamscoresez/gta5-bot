@@ -4,15 +4,13 @@ const db = new Database('contracts.db');
 // Включаем WAL-режим для ускорения записи
 db.pragma('journal_mode = WAL');
 
-// Создаем все нужные таблицы:
-// 1. active_contracts - для текущих контрактов
-// 2. contract_history - для архивных завершенных контрактов
-// 3. treasury - для баланса казны
+// Обновляем схему: добавили channelId в active_contracts
 db.exec(`
     CREATE TABLE IF NOT EXISTS active_contracts (
         msgId TEXT PRIMARY KEY, 
         creatorId TEXT, 
-        endTime INTEGER
+        endTime INTEGER,
+        channelId TEXT
     );
 
     CREATE TABLE IF NOT EXISTS contract_history (
@@ -26,6 +24,11 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS treasury (
         id INTEGER PRIMARY KEY CHECK (id = 1), 
         balance INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS debtors (
+        name TEXT PRIMARY KEY, 
+        amount INTEGER
     );
 `);
 

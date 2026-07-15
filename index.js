@@ -9,7 +9,7 @@ process.on('uncaughtException', err => { console.error('Uncaught exception:', er
 
 db.prepare('CREATE TABLE IF NOT EXISTS debtors (name TEXT PRIMARY KEY, amount INTEGER)').run();
 db.prepare('CREATE TABLE IF NOT EXISTS treasury (id INTEGER PRIMARY KEY, balance INTEGER)').run();
-db.prepare('CREATE TABLE IF NOT EXISTS active_contracts (msgId TEXT PRIMARY KEY, creatorId TEXT, endTime INTEGER)').run();
+db.prepare('CREATE TABLE IF NOT EXISTS active_contracts (msgId TEXT PRIMARY KEY, creatorId TEXT, endTime INTEGER, channelId TEXT)').run();
 db.prepare('INSERT OR IGNORE INTO treasury (id, balance) VALUES (1, 0)').run();
 
 const CONFIG = {
@@ -41,6 +41,19 @@ client.once('ready', async () => {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     console.log(`🚀 Бот ${client.user.tag} запущен!`);
+
+    // Восстанавливаем таймеры после рестарта
+    const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
+    for (const contract of activeContracts) {
+        try {
+            const channel = await client.channels.fetch(contract.channelId);
+            setupTimer(channel, contract.creatorId, contract.endTime);
+            console.log(`⏱️ Таймер восстановлен для контракта ${contract.msgId}`);
+        } catch (err) {
+            console.error('Ошибка восстановления таймера:', err);
+            db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
+        }
+    }
 });
 
 client.on('messageCreate', async msg => {
@@ -131,6 +144,7 @@ client.on('interactionCreate', async i => {
                 }
 
                 await i.deferUpdate();
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
 
                 const creatorMatch = i.message.content.match(/<@(\d+)>/);
                 const creatorId = creatorMatch ? creatorMatch[1] : null;
@@ -222,6 +236,9 @@ client.on('interactionCreate', async i => {
                         new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger)
                     )]
                 });
+
+                db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)')
+                  .run(msg.id, i.user.id, endTime, msg.channelId);
 
                 setupTimer(msg.channel, i.user.id, endTime);
                 await i.editReply('✅ Контракт успешно создан!');
