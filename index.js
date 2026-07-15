@@ -44,14 +44,31 @@ client.once('ready', async () => {
 
     // Восстанавливаем таймеры после рестарта
     const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
+    console.log(`🔍 Найдено активных контрактов в БД: ${activeContracts.length}`);
+
     for (const contract of activeContracts) {
         try {
-            const channel = await client.channels.fetch(contract.channelId);
-            setupTimer(channel, contract.creatorId, contract.endTime);
-            console.log(`⏱️ Таймер восстановлен для контракта ${contract.msgId}`);
+            console.log(`🛠 Попытка восстановления: ${contract.msgId}, канал: ${contract.channelId}`);
+            
+            // Если контракт уже просрочен — сразу пишем в канал
+            if (Date.now() >= contract.endTime) {
+                const channel = await client.channels.fetch(contract.channelId);
+                await channel.send(`⚠️ **ВРЕМЯ КОНТРАКТА ВЫШЛО (пока бот был оффлайн)!** <@${contract.creatorId}>, проверьте и закройте его.`);
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
+                console.log(`✅ Контракт ${contract.msgId} был просрочен, уведомление отправлено.`);
+            } else {
+                // Если время еще есть — запускаем таймер
+                const channel = await client.channels.fetch(contract.channelId);
+                setupTimer(channel, contract.creatorId, contract.endTime);
+                console.log(`✅ Таймер восстановлен для контракта ${contract.msgId}`);
+            }
         } catch (err) {
-            console.error('Ошибка восстановления таймера:', err);
-            db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
+            console.error(`❌ Ошибка при восстановлении контракта ${contract.msgId}:`, err);
+            // Если канал не найден — возможно, он удален, можно удалить запись из БД
+            if (err.code === 10003) { 
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
+                console.log(`🗑 Удалена запись о контракте ${contract.msgId} (канал не найден).`);
+            }
         }
     }
 });
@@ -119,7 +136,7 @@ client.on('interactionCreate', async i => {
             }
             if (i.commandName === 'вызвать') {
                 return i.reply({ 
-                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\nНажмите кнопку ниже, чтобы создать новый контракт.", 
+                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\nВы пикаете контракты в игре, после этого нажимаете на кнопку ниже, у вас открывается панель в которой вы вписываете данные для контракта который вы пикнули в игре.\nЗа всеми вопросами обращаться к <@702529657718833162>", 
                     components: [
                         new ActionRowBuilder().addComponents(
                             new ButtonBuilder()
