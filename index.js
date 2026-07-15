@@ -37,6 +37,22 @@ client.once('ready', async () => {
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     console.log(`🚀 Бот ${client.user.tag} запущен!`);
 
+    // --- СТАТИСТИКА ПРИ ЗАПУСКЕ ---
+    const treasury = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
+    const debtorsCount = db.prepare('SELECT COUNT(*) as count FROM debtors').get();
+    const totalDebts = db.prepare('SELECT SUM(amount) as total FROM debtors').get();
+    const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
+    
+    const succCount = stats.find(s => s.status === 'success')?.count || 0;
+    const failCount = stats.find(s => s.status === 'fail')?.count || 0;
+
+    console.log(`\n📊 --- СТАТИСТИКА БОТА ---`);
+    console.log(`💰 Баланс казны: ${(treasury?.balance || 0).toLocaleString()}$`);
+    console.log(`👥 Должники: ${debtorsCount.count} чел. (Общий долг: ${(totalDebts.total || 0).toLocaleString()}$ )`);
+    console.log(`✅ Успешных контрактов: ${succCount}`);
+    console.log(`❌ Проваленных контрактов: ${failCount}`);
+    console.log(`--------------------------\n`);
+
     const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
     console.log(`🔍 Найдено активных контрактов в БД: ${activeContracts.length}`);
 
@@ -56,18 +72,14 @@ client.once('ready', async () => {
 
 client.on('messageCreate', async msg => {
     if (msg.author.bot) return;
-
     if ((msg.channel.id === CONFIG.PICK || msg.channel.id === CONFIG.PROCESS) && msg.content !== '!подтвердить') {
         return await msg.delete().catch(() => {});
     }
-
     if (msg.channel.id === CONFIG.PAY && msg.content.toLowerCase().trim() === '!подтвердить') {
         const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
         if (!hasRole) return await msg.reply('❌ Ошибка! У вас нет прав проверяющего.');
-
         const channelMessages = await msg.channel.messages.fetch({ limit: 20 });
         const pendingMsg = channelMessages.find(m => m.author.id === client.user.id && m.content.includes('⏳ **Ожидание подтверждения...**'));
-
         if (pendingMsg) {
             const embed = pendingMsg.embeds[0];
             if (embed) {    
@@ -84,7 +96,6 @@ client.on('messageCreate', async msg => {
                     db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);    
                 }
             }
-
             await pendingMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
             await msg.reply('✅ Контракт успешно закрыт, долги обновлены.');
         } else {
@@ -118,11 +129,7 @@ client.on('interactionCreate', async i => {
             if (i.commandName === 'вызвать') {
                 return i.reply({ 
                     content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\nЗа всеми вопросами обращаться к <@702529657718833162>", 
-                    components: [
-                        new ActionRowBuilder().addComponents(
-                            new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary)
-                        )
-                    ] 
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] 
                 });
             }
         }
@@ -153,6 +160,12 @@ client.on('interactionCreate', async i => {
                 const creatorId = creatorMatch ? creatorMatch[1] : null;
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const isSuccess = i.customId === 'succ';
+                
+                // ЗАПИСЬ В ИСТОРИЮ
+                db.prepare('INSERT INTO contract_history (msgId, creatorId, status, finishedAt) VALUES (?, ?, ?, ?)').run(
+                    i.message.id, creatorId, isSuccess ? 'success' : 'fail', new Date().toISOString()
+                );
+
                 const multiplier = isSuccess ? (participants.length < 2 ? 0.4 : 0.2) : (participants.length < 2 ? 0.5 : 0.3);
 
                 const payEmbed = new EmbedBuilder()
