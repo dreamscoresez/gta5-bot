@@ -110,7 +110,7 @@ client.on('interactionCreate', async i => {
                     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('n').setLabel('Название').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('Ограбление')),
                     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nicknames').setLabel('Ники (через ;)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('Artem Minoru;Yuto Minoru')),
                     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bills').setLabel('Векселя (через ;)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('25;20')),
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('time').setLabel('Время (ЧЧ:ММ)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('ЧЧ:20'))
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('time').setLabel('Время (ЧЧ:ММ)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('02:20'))
                 );
                 return i.showModal(modal);
             }
@@ -193,7 +193,7 @@ client.on('interactionCreate', async i => {
                 function NicknamesCheck(str) { return /^[a-zA-Zа-яА-ЯёЁ0-9_\s;]+$/.test(str); }
 
                 if (!nameNickRegex.test(name) || !NicknamesCheck(nicksStr) || !billRegex.test(billsStr) || !timeRegex.test(timeStr)) {
-                    return i.editReply({ content: '❌ Ошибка синтаксиса! Проверьте данные:\n- Ники: текст через ;\n- Векселя: цифры через ;\n- Время: ЧЧ:ММ' });
+                    return i.editReply({ content: '❌ Ошибка синтаксиса! Проверьте данные:\n- Ники: текст через ; (без _-/ между именем и фамилией, а так же без пробела между фамилией и следующим ником(Artem Minoru;Kimito Minoru))\n- Векселя: цифры через ;\n- Время: ЧЧ:ММ' });
                 }
 
                 const [h, m] = timeStr.split(':').map(Number);
