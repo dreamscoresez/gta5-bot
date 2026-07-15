@@ -1,10 +1,22 @@
 const Database = require('better-sqlite3');
-const db = new Database('contracts.db');
+const fs = require('fs');
+const path = require('path');
+
+// Путь к папке, которую ты примонтировал в Railway как Volume
+const dbDir = '/app/contracts-db';
+const dbPath = path.join(dbDir, 'contracts.db');
+
+// Проверяем, существует ли папка, если нет — создаем её
+if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+}
+
+const db = new Database(dbPath);
 
 // Включаем WAL-режим для ускорения записи
 db.pragma('journal_mode = WAL');
 
-// Обновляем схему: добавили channelId в active_contracts
+// Обновляем схему
 db.exec(`
     CREATE TABLE IF NOT EXISTS active_contracts (
         msgId TEXT PRIMARY KEY, 
