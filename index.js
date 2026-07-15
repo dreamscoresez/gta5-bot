@@ -59,14 +59,19 @@ client.on('messageCreate', async msg => {
 
         if (pendingMsg) {
             const embed = pendingMsg.embeds[0];
-            if (embed) {
-                embed.fields.forEach(field => {
-                    const amount = parseInt(field.value.replace(/\D/g, ''));
-                    if (!isNaN(amount)) {
-                        db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
-                    }
-                });
-                db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
+            if (embed) {    
+                let totalPaid = 0;    
+                embed.fields.forEach(field => {        
+                    const amount = parseInt(field.value.replace(/\D/g, ''));        
+                    if (!isNaN(amount)) {            
+                        db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);            
+                        totalPaid += amount;        
+                    }    
+                });    
+                db.prepare('DELETE FROM debtors WHERE amount <= 0').run();    
+                if (totalPaid > 0) {        
+                    db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);    
+                }
             }
 
             await pendingMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
