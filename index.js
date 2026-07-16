@@ -19,10 +19,10 @@ const CONFIG = {
 const setupTimer = async (channel, creatorId, endTime) => {
     const remaining = endTime - Date.now();
     setTimeout(async () => {
-        try { 
-            await channel.send(`⚠️ **ВРЕМЯ ВЫШЛО!** <@${creatorId}>, проверьте и закройте контракт!`); 
-        } catch (err) { 
-            console.error('Ошибка таймера:', err); 
+        try {
+            await channel.send(`⚠️ **ВРЕМЯ ВЫШЛО!** <@${creatorId}>, проверьте и закройте контракт!`);
+        } catch (err) {
+            console.error('Ошибка таймера:', err);
         }
     }, Math.max(0, remaining));
 };
@@ -145,9 +145,9 @@ client.on('interactionCreate', async i => {
             if (!hasRole) return i.reply({ content: '❌ Ошибка! У вас нет прав.', flags: [MessageFlags.Ephemeral] });
 
             if (i.commandName === 'вызвать') {
-                return i.reply({ 
-                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**", 
-                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] 
+                return i.reply({
+                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**",
+                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))]
                 });
             }
             
@@ -196,6 +196,14 @@ client.on('interactionCreate', async i => {
                 if (Date.now() < endTime) return i.reply({ content: '❌ Рано!', flags: [MessageFlags.Ephemeral] });
                 
                 await i.deferUpdate();
+                
+                // Удаление сообщения таймера
+                try {
+                    const msgs = await i.channel.messages.fetch({ limit: 10 });
+                    const alertMsg = msgs.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО!'));
+                    if (alertMsg) await alertMsg.delete();
+                } catch (e) { console.error('Ошибка при удалении сообщения уведомления'); }
+
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
                 
                 const isSuccess = i.customId === 'succ';
@@ -203,10 +211,10 @@ client.on('interactionCreate', async i => {
                 
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 
-                // --- ЛОГИРОВАНИЕ ДЕТАЛЕЙ КОНТРАКТА ---
-                console.log(`[LOG] Завершен контракт: ${oldEmbed.title}`);
-                console.log(`[LOG] Участники контракта:`);
-                participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
+                // Логирование завершения
+                console.log(`[LOG] --- Завершение контракта ---`);
+                console.log(`[LOG] Контракт: ${oldEmbed.title}`);
+                participants.forEach(f => console.log(`[LOG] Участник: ${f.name} | Данные: ${f.value}`));
                 
                 const count = participants.length;
                 const multiplier = isSuccess ? (count >= 2 ? 0.2 : 0.4) : (count >= 2 ? 0.3 : 0.5);
@@ -222,10 +230,10 @@ client.on('interactionCreate', async i => {
                 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    await payChannel.send({ 
-                        content: `🔔 **Новая оплата по контракту.** Исполнитель: <@${i.user.id}>`, 
-                        embeds: [payEmbed], 
-                        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success))] 
+                    await payChannel.send({
+                        content: `🔔 **Новая оплата по контракту.** Исполнитель: <@${i.user.id}>`,
+                        embeds: [payEmbed],
+                        components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success))]
                     });
                 }
             }
@@ -244,6 +252,10 @@ client.on('interactionCreate', async i => {
             const [h, m] = i.fields.getTextInputValue('time').split(':').map(Number);
             const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
             
+            // Логирование создания
+            console.log(`[LOG] Создан контракт: ${name}`);
+            nicknames.forEach((nick, idx) => console.log(`[LOG] Участник: ${nick.trim()}, Векселя: ${bills[idx] || 0}`));
+            
             const embed = new EmbedBuilder().setTitle(name).setColor(0x0099FF);
             nicknames.forEach((nick, idx) => {
                 embed.addFields({ name: nick.trim(), value: `Векселей: ${bills[idx] || 0}`, inline: false });
@@ -252,10 +264,10 @@ client.on('interactionCreate', async i => {
             embed.addFields({ name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false });
             
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
-            const msg = await processChannel.send({ 
-                content: `Контракт взял: <@${i.user.id}>`, 
-                embeds: [embed], 
-                components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger))] 
+            const msg = await processChannel.send({
+                content: `Контракт взял: <@${i.user.id}>`,
+                embeds: [embed],
+                components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger))]
             });
             
             db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
@@ -269,3 +281,9 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 client.login(process.env.TOKEN);
+
+// Технический блок для сохранения структуры кода
+// ...
+// ...
+// ...
+// Бот настроен и готов к работе.
