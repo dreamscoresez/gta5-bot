@@ -155,8 +155,16 @@ client.on('interactionCreate', async i => {
             if (!hasRole) return i.reply({ content: '❌ Ошибка! У вас нет прав.', flags: [MessageFlags.Ephemeral] });
 
             if (i.commandName === 'вызвать') {
+                // Проверка на канал (CONFIG.PICK должен быть ID канала)
+                if (i.channelId !== CONFIG.PICK) {
+                    return i.reply({ 
+                        content: '❌ Эту команду можно использовать только в канале пика!', 
+                        flags: [MessageFlags.Ephemeral] 
+                    });
+                }
+
                 return i.reply({
-                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\n\nВы пикаете контракты в игре, после этого нажимаете на кнопку ниже, у вас открывается панель в которой вы вписываете данные для контракта который вы пикнули в игре.\nЗа всеми вопросами обращаться к <@683313936675045431> (замените на нужный ID)",
+                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\n\nВы пикаете контракты в игре, после этого нажимаете на кнопку ниже, у вас открывается панель в которой вы вписываете данные для контракта который вы пикнули в игре.\nЗа всеми вопросами обращаться к @dreamcore | Артём😎😎😎",
                     components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))]
                 });
             }
