@@ -45,6 +45,9 @@ client.once('clientReady', async () => {
     const totalDebts = db.prepare('SELECT SUM(amount) as total FROM debtors').get();
     const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
     
+    // Добавляем запрос для активных контрактов
+    const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
+    
     const succCount = stats.find(s => s.status === 'success')?.count || 0;
     const failCount = stats.find(s => s.status === 'fail')?.count || 0;
 
@@ -53,6 +56,7 @@ client.once('clientReady', async () => {
     console.log(`👥 Должники: ${debtorsCount.count} чел. (Общий долг: ${(totalDebts.total || 0).toLocaleString()}$ )`);
     console.log(`✅ Успешных контрактов: ${succCount}`);
     console.log(`❌ Проваленных контрактов: ${failCount}`);
+    console.log(`⏳ Активных контрактов: ${activeCount.count}`); // Вывод в статистику
     console.log(`--------------------------\n`);
 
     const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
@@ -71,7 +75,6 @@ client.once('clientReady', async () => {
         } catch (err) { console.error(`Ошибка восстановления ${contract.msgId}:`, err); }
     }
 });
-
 client.on('messageCreate', async msg => {
     if (msg.author.bot) return;
 
@@ -209,7 +212,7 @@ client.on('interactionCreate', async i => {
             }
         }
         
-        if (i.isModalSubmit() && i.customId === 'm') {
+if (i.isModalSubmit() && i.customId === 'm') {
             await i.deferReply({ flags: [MessageFlags.Ephemeral] });
             const name = i.fields.getTextInputValue('n');
             const [h, m] = i.fields.getTextInputValue('time').split(':').map(Number);
@@ -218,7 +221,12 @@ client.on('interactionCreate', async i => {
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
             const msg = await processChannel.send({ content: `Контракт взял: <@${i.user.id}>`, embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger))] });
             
-            db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
+            // Записываем в базу и получаем информацию о результате
+            const info = db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
+            
+            // ЛОГ ДЛЯ ОТЛАДКИ:
+            console.log(`[DEBUG] Запись контракта в БД: ${info.changes} изменений. (msgId: ${msg.id})`);
+            
             console.log(`[LOG] Контракт "${name}" создан пользователем ${i.user.tag}`);
             await i.editReply('✅ Контракт успешно создан!');
         }
