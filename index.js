@@ -45,7 +45,6 @@ client.once('clientReady', async () => {
     const totalDebts = db.prepare('SELECT SUM(amount) as total FROM debtors').get();
     const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
     
-    // Добавляем запрос для активных контрактов
     const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
     
     const succCount = stats.find(s => s.status === 'success')?.count || 0;
@@ -56,7 +55,7 @@ client.once('clientReady', async () => {
     console.log(`👥 Должники: ${debtorsCount.count} чел. (Общий долг: ${(totalDebts.total || 0).toLocaleString()}$ )`);
     console.log(`✅ Успешных контрактов: ${succCount}`);
     console.log(`❌ Проваленных контрактов: ${failCount}`);
-    console.log(`⏳ Активных контрактов: ${activeCount.count}`); // Вывод в статистику
+    console.log(`⏳ Активных контрактов: ${activeCount.count}`);
     console.log(`--------------------------\n`);
 
     const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
@@ -75,9 +74,9 @@ client.once('clientReady', async () => {
         } catch (err) { console.error(`Ошибка восстановления ${contract.msgId}:`, err); }
     }
 });
+
 client.on('messageCreate', async msg => {
     if (msg.author.bot) return;
-
     if ((msg.channel.id === CONFIG.PICK || msg.channel.id === CONFIG.PROCESS) && msg.content !== '!подтвердить') {
         return await msg.delete().catch(() => {});
     }
@@ -119,41 +118,27 @@ client.on('interactionCreate', async i => {
         if (i.isChatInputCommand()) {
             if (i.commandName === 'казна') {
                 const row = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
-                console.log(`[LOG] ${i.user.tag} запросил баланс.`);
                 return i.reply({ content: `💰 Баланс: **${(row?.balance || 0).toLocaleString()} $**`, flags: [MessageFlags.Ephemeral] });
             }
             if (i.commandName === 'должники') {
                 const debtors = db.prepare('SELECT * FROM debtors').all();
                 const text = debtors.length ? debtors.map(d => `• **${d.name}**: ${d.amount.toLocaleString()}$`).join('\n') : 'Должников нет.';
-                console.log(`[LOG] ${i.user.tag} запросил список должников.`);
                 return i.reply({ content: `📋 **Должники:**\n${text}`, flags: [MessageFlags.Ephemeral] });
             }
-
             const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-            if (!hasRole) {
-                console.log(`[WARN] ${i.user.tag} без прав использовал /${i.commandName}`);
-                return i.reply({ content: '❌ Ошибка! У вас нет прав.', flags: [MessageFlags.Ephemeral] });
-            }
+            if (!hasRole) return i.reply({ content: '❌ Ошибка! У вас нет прав.', flags: [MessageFlags.Ephemeral] });
 
             if (i.commandName === 'вызвать') {
-                console.log(`[LOG] ${i.user.tag} открыл панель контрактов.`);
-                return i.reply({ 
-                    content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**", 
-                    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] 
-                });
+                return i.reply({ content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**", components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))] });
             }
-            
             if (i.commandName === 'чек_контракты') {
                 const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
-                console.log(`[DEBUG] /чек_контракты, в БД записей: ${activeContracts.length}`, activeContracts);
-                
                 for (const contract of activeContracts) {
                     const channel = await client.channels.fetch(contract.channelId);
                     setupTimer(channel, contract.creatorId, contract.endTime);
                 }
                 return i.reply({ content: `✅ Проверено контрактов в БД: ${activeContracts.length}`, flags: [MessageFlags.Ephemeral] });
             }
-
             if (['пополнить', 'вычесть', 'долг_добавить', 'оплачено'].includes(i.commandName)) {
                 const amt = i.options.getInteger('сумма');
                 const nick = i.options.getString('ник');
@@ -164,7 +149,6 @@ client.on('interactionCreate', async i => {
                     db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amt, nick);
                     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
                 }
-                console.log(`[LOG] ${i.user.tag} выполнил /${i.commandName} ${nick || ''} ${amt}$`);
                 return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
             }
         }
@@ -172,10 +156,10 @@ client.on('interactionCreate', async i => {
         if (i.isButton()) {
             if (i.customId === 'start') {
                 const modal = new ModalBuilder().setCustomId('m').setTitle('Создание контракта').addComponents(
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('n').setLabel('Название').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('Ограбление')),
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nicknames').setLabel('Ники (через ;)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('Artem Minoru;Yuto Minoru')),
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bills').setLabel('Векселя (через ;)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('25;52')),
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('time').setLabel('Время (ЧЧ:ММ)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('02:22'))
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('n').setLabel('Название').setPlaceholder('Ограбление').setStyle(TextInputStyle.Short).setRequired(true)),
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nicknames').setLabel('Ники (через ;)').setPlaceholder('Artem Minoru;Yuto Minoru').setStyle(TextInputStyle.Short).setRequired(true)),
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bills').setLabel('Векселя (через ;)').setPlaceholder('25;52').setStyle(TextInputStyle.Short).setRequired(true)),
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('time').setLabel('Время (ЧЧ:ММ)').setPlaceholder('02:22').setStyle(TextInputStyle.Short).setRequired(true))
                 );
                 return i.showModal(modal);
             }
@@ -188,10 +172,7 @@ client.on('interactionCreate', async i => {
                 
                 await i.deferUpdate();
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
-                
                 const isSuccess = i.customId === 'succ';
-                console.log(`[LOG] Контракт закрыт: ${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'}`);
-                
                 db.prepare('INSERT INTO contract_history (msgId, creatorId, status, finishedAt) VALUES (?, ?, ?, ?)').run(i.message.id, null, isSuccess ? 'success' : 'fail', new Date().toISOString());
                 const multiplier = isSuccess ? 0.2 : 0.3;
                 
@@ -207,12 +188,10 @@ client.on('interactionCreate', async i => {
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) await payChannel.send({ content: `🔔 **Оплата по контракту**`, embeds: [payEmbed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success))] });
             }
-            if (i.customId === 'pay_confirm') {
-                await i.update({ content: `⏳ **Ожидание подтверждения...**`, components: [] });
-            }
+            if (i.customId === 'pay_confirm') await i.update({ content: `⏳ **Ожидание подтверждения...**`, components: [] });
         }
         
-if (i.isModalSubmit() && i.customId === 'm') {
+        if (i.isModalSubmit() && i.customId === 'm') {
             await i.deferReply({ flags: [MessageFlags.Ephemeral] });
             const name = i.fields.getTextInputValue('n');
             const [h, m] = i.fields.getTextInputValue('time').split(':').map(Number);
@@ -221,13 +200,7 @@ if (i.isModalSubmit() && i.customId === 'm') {
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
             const msg = await processChannel.send({ content: `Контракт взял: <@${i.user.id}>`, embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger))] });
             
-            // Записываем в базу и получаем информацию о результате
-            const info = db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
-            
-            // ЛОГ ДЛЯ ОТЛАДКИ:
-            console.log(`[DEBUG] Запись контракта в БД: ${info.changes} изменений. (msgId: ${msg.id})`);
-            
-            console.log(`[LOG] Контракт "${name}" создан пользователем ${i.user.tag}`);
+            db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
             await i.editReply('✅ Контракт успешно создан!');
         }
     } catch (err) { console.error('Ошибка:', err); }
