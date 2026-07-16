@@ -142,27 +142,28 @@ client.on('interactionCreate', async i => {
             
             if (i.commandName === 'казна') {
                 const row = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
+                console.log(`[RESULT] /казна для ${i.user.tag}: Успешно.`);
                 return i.reply({ content: `💰 Баланс: **${(row?.balance || 0).toLocaleString()} $**`, flags: [MessageFlags.Ephemeral] });
             }
             
             if (i.commandName === 'должники') {
                 const debtors = db.prepare('SELECT * FROM debtors').all();
                 const text = debtors.length ? debtors.map(d => `• **${d.name}**: ${d.amount.toLocaleString()}$`).join('\n') : 'Должников нет.';
+                console.log(`[RESULT] /должники для ${i.user.tag}: Успешно.`);
                 return i.reply({ content: `📋 **Список должников:**\n${text}`, flags: [MessageFlags.Ephemeral] });
             }
 
             const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-            if (!hasRole) return i.reply({ content: '❌ Ошибка! У вас нет прав.', flags: [MessageFlags.Ephemeral] });
+            if (!hasRole) {
+                console.log(`[RESULT] /${i.commandName} для ${i.user.tag}: ОТКАЗАНО (нет прав).`);
+                return i.reply({ content: '❌ Ошибка! У вас нет прав.', flags: [MessageFlags.Ephemeral] });
+            }
 
             if (i.commandName === 'вызвать') {
-                // Проверка на канал (CONFIG.PICK должен быть ID канала)
                 if (i.channelId !== CONFIG.PICK) {
-                    return i.reply({ 
-                        content: '❌ Эту команду можно использовать только в канале пика!', 
-                        flags: [MessageFlags.Ephemeral] 
-                    });
+                    return i.reply({ content: '❌ Эту команду можно использовать только в канале пика!', flags: [MessageFlags.Ephemeral] });
                 }
-
+                console.log(`[RESULT] /вызвать для ${i.user.tag}: Успешно.`);
                 return i.reply({
                     content: "📢 **ПАНЕЛЬ КОНТРАКТОВ**\n\nВы пикаете контракты в игре, после этого нажимаете на кнопку ниже, у вас открывается панель в которой вы вписываете данные для контракта который вы пикнули в игре.\nЗа всеми вопросами обращаться к @dreamcore | Артём😎😎😎",
                     components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))]
@@ -175,6 +176,7 @@ client.on('interactionCreate', async i => {
                     const channel = await client.channels.fetch(contract.channelId);
                     setupTimer(channel, contract.creatorId, contract.endTime);
                 }
+                console.log(`[RESULT] /чек_контракты для ${i.user.tag}: Успешно.`);
                 return i.reply({ content: `✅ Проверено контрактов: ${activeContracts.length}`, flags: [MessageFlags.Ephemeral] });
             }
 
@@ -189,6 +191,7 @@ client.on('interactionCreate', async i => {
                     db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amt, nick);
                     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
                 }
+                console.log(`[RESULT] /${i.commandName} для ${i.user.tag}: Выполнено.`);
                 return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
             }
         }
@@ -212,7 +215,10 @@ client.on('interactionCreate', async i => {
                 const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
                 const endTime = parseInt(timestampMatch[1]) * 1000;
                 
-                if (Date.now() < endTime) return i.reply({ content: '❌ Рано!', flags: [MessageFlags.Ephemeral] });
+                if (Date.now() < endTime) {
+                    console.log(`[RESULT] Кнопка ${i.customId}: Рано.`);
+                    return i.reply({ content: '❌ Рано!', flags: [MessageFlags.Ephemeral] });
+                }
                 
                 await i.deferUpdate();
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
@@ -238,10 +244,10 @@ client.on('interactionCreate', async i => {
                         components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success))]
                     });
                 }
+                console.log(`[RESULT] Кнопка ${i.customId}: Обработано успешно.`);
             }
         }
         
-        // --- ОБРАБОТКА МОДАЛЬНОГО ОКНА С ВАЛИДАЦИЕЙ ---
         if (i.isModalSubmit() && i.customId === 'm') {
             await i.deferReply({ flags: [MessageFlags.Ephemeral] });
             
@@ -250,7 +256,6 @@ client.on('interactionCreate', async i => {
             const billsRaw = i.fields.getTextInputValue('bills').trim();
             const timeRaw = i.fields.getTextInputValue('time').trim();
 
-            // Валидация через RegEx
             if (!/^[а-яА-ЯёЁ\s]+$/.test(name)) return i.editReply('❌ Ошибка: Название должно быть на кириллице.');
             if (!/^[a-zA-Z0-9_\s;]+$/.test(nicknamesRaw)) return i.editReply('❌ Ошибка: Ники (только латиница, цифры, _, ;).');
             if (!/^[0-9;]+$/.test(billsRaw)) return i.editReply('❌ Ошибка: Векселя (только цифры и ;).');
@@ -259,7 +264,6 @@ client.on('interactionCreate', async i => {
             const nicknames = nicknamesRaw.split(';');
             const bills = billsRaw.split(';');
 
-            // Проверка количества элементов
             if (nicknames.length !== bills.length) {
                 return i.editReply('❌ Ошибка: Количество ников не совпадает с количеством векселей.');
             }
@@ -281,6 +285,7 @@ client.on('interactionCreate', async i => {
             });
             
             db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
+            console.log(`[RESULT] Создание контракта: Успешно.`);
             await i.editReply('✅ Контракт успешно создан!');
         }
     } catch (err) {
