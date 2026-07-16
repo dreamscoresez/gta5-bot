@@ -18,7 +18,7 @@ const setupTimer = async (channel, creatorId, endTime) => {
     const remaining = endTime - Date.now();
     setTimeout(async () => {
         try {
-            await channel.send(`⚠️ **ВРЕМЯ ВЫШЛО!** <@${creatorId}>, проверьте и закройте контракт!`);
+            await channel.send(`⚠️ **ВРЕМЯ ВЫШЛО!** <@${creatorId}>, проверьте и закройте контракт после того как он завершится в игре!`);
         } catch (err) { console.error('Ошибка таймера:', err); }
     }, Math.max(0, remaining));
 };
