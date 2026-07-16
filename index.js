@@ -199,6 +199,21 @@ client.on('interactionCreate', async i => {
                 await i.deferUpdate();
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
 
+                // Удаляем сообщение "ВРЕМЯ ВЫШЛО" если оно есть
+                try {
+                    const recentMessages = await i.channel.messages.fetch({ limit: 20 });
+                    const timerMsg = recentMessages.find(m => 
+                        m.author.id === client.user.id && 
+                        m.content.includes('ВРЕМЯ ВЫШЛО')
+                    );
+                    if (timerMsg) {
+                        await timerMsg.delete();
+                        console.log(`[DELETE] Удалено сообщение "ВРЕМЯ ВЫШЛО" msgId: ${timerMsg.id}`);
+                    }
+                } catch (err) {
+                    console.error('[ERROR] Не удалось удалить сообщение таймера:', err);
+                }
+
                 const isSuccess = i.customId === 'succ';
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const multiplier = isSuccess ? (participants.length >= 2 ? 0.2 : 0.4) : (participants.length >= 2 ? 0.3 : 0.5);
