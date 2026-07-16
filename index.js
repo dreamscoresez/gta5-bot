@@ -31,7 +31,8 @@ const commands = [
     new SlashCommandBuilder().setName('должники').setDescription('Список должников'),
     new SlashCommandBuilder().setName('долг_добавить').setDescription('Добавить должника').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
     new SlashCommandBuilder().setName('оплачено').setDescription('Закрыть долг').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
-    new SlashCommandBuilder().setName('чек_контракты').setDescription('Принудительно проверить все таймеры')
+    new SlashCommandBuilder().setName('чек_контракты').setDescription('Принудительно проверить все таймеры'),
+    new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота')
 ];
 
 client.once('clientReady', async () => {
@@ -159,6 +160,25 @@ client.on('interactionCreate', async i => {
                     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
                 }
                 return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
+            }
+
+            if (i.commandName === 'статистика') {
+                const treasury = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
+                const debtorsList = db.prepare('SELECT name, amount FROM debtors').all();
+                const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
+                const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
+
+                let logMsg = `\n📊 --- СТАТИСТИКА БОТА (запрос от ${i.user.tag}) ---\n`;
+                logMsg += `💰 Баланс казны: ${(treasury?.balance || 0).toLocaleString()} $\n`;
+                logMsg += `👥 Должники (${debtorsList.length} чел.):\n`;
+                debtorsList.forEach(d => { logMsg += `   • ${d.name}: ${d.amount.toLocaleString()} $\n`; });
+                logMsg += `✅ Успешных: ${stats.find(s => s.status === 'success')?.count || 0}\n`;
+                logMsg += `❌ Проваленных: ${stats.find(s => s.status === 'fail')?.count || 0}\n`;
+                logMsg += `⏳ Активных контрактов: ${activeCount.count || 0}\n`;
+                logMsg += `--------------------------`;
+
+                console.log(logMsg);
+                return i.reply({ content: '✅ Статистика выведена в логи.', flags: [MessageFlags.Ephemeral] });
             }
         }
 
