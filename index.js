@@ -348,7 +348,7 @@ client.on('interactionCreate', async i => {
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
+                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${contract.creatorId}>`;
                     await payChannel.send({
                         content: `${rolePings}`,
                         embeds: [payEmbed],
