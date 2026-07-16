@@ -5,6 +5,8 @@ const path = require('path');
 // Путь к папке тома (Volume), которая сохраняется после рестарта
 const dbDir = '/app/contracts-db';
 const dbPath = path.join(dbDir, 'contracts.db');
+console.log(`[DEBUG] Файл базы данных находится по пути: ${dbPath}`);
+console.log(`[DEBUG] Папка существует: ${fs.existsSync(dbDir)}`);
 
 // Гарантируем наличие папки
 if (!fs.existsSync(dbDir)) {
