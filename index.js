@@ -148,7 +148,14 @@ client.on('messageCreate', async msg => {
             console.log(`[LOG] Итого в казну: ${totalPaid.toLocaleString()} $`);
 
             await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
-            await msg.reply('✅ Контракт закрыт, долги обновлены.');
+            
+            // Вставляем логику удаления:
+            const replyMsg = await msg.reply('✅ Контракт закрыт, долги обновлены.');
+            setTimeout(async () => {
+                await msg.delete().catch(() => {});
+                await replyMsg.delete().catch(() => {});
+            }, 5000); 
+
         } catch (err) {
             console.error(err);
             await msg.reply('❌ Ошибка при поиске сообщения.');
