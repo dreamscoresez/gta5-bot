@@ -70,7 +70,28 @@ client.once('clientReady', async () => {
 
 client.on('messageCreate', async msg => {
     if (msg.author.bot) return;
+    // --- АДМИН КОМАНДЫ ---
+    if (msg.content.startsWith('!импорт_контракт') || msg.content.startsWith('!закрыть_контракт')) {
+        const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+        if (!hasRole) return await msg.reply('❌ Нет прав.');
+        if (!msg.reference) return await msg.reply('❌ Ответь на сообщение!');
 
+        try {
+            const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
+            if (msg.content.startsWith('!импорт_контракт')) {
+                db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)')
+                    .run(targetMsg.id, targetMsg.author.id, Date.now() + 86400000, targetMsg.channelId);
+                await msg.reply('✅ Импортировано.');
+            }
+            if (msg.content.startsWith('!закрыть_контракт')) {
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(targetMsg.id);
+                await targetMsg.edit({ components: [] });
+                await msg.reply('✅ Закрыто.');
+            }
+        } catch (err) { await msg.reply('❌ Ошибка.'); }
+        return; 
+    }
+    // ---------------------
     if ((msg.channel.id === CONFIG.PICK || msg.channel.id === CONFIG.PROCESS) && msg.content !== '!подтвердить') {
         await msg.delete().catch(() => {});
         console.log(`[DELETE] Удалено сообщение от ${msg.author.tag} в #${msg.channel.name}: "${msg.content.substring(0, 50)}"`);
