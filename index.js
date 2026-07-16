@@ -70,12 +70,30 @@ client.once('clientReady', async () => {
 
 client.on('messageCreate', async msg => {
     if (msg.author.bot) return;
-    // --- АДМИН КОМАНДЫ ---
-    if (msg.content.startsWith('!импорт_контракт') || msg.content.startsWith('!закрыть_контракт')) {
+// --- АДМИН КОМАНДЫ ---
+    // Этот блок теперь включает !импорт_контракт, !закрыть_контракт и !список
+    if (msg.content.startsWith('!импорт_контракт') || msg.content.startsWith('!закрыть_контракт') || msg.content.startsWith('!список')) {
         const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
         if (!hasRole) return await msg.reply('❌ Нет прав.');
-        if (!msg.reference) return await msg.reply('❌ Ответь на сообщение!');
+        
+        // ЛОГИКА ДЛЯ !список
+        if (msg.content.startsWith('!список')) {
+            const activeContracts = db.prepare('SELECT msgId, creatorId, endTime FROM active_contracts').all();
+            console.log(`\n📋 АКТИВНЫЕ КОНТРАКТЫ (${activeContracts.length}):`);
+            if (activeContracts.length === 0) {
+                console.log(' - Активных контрактов нет.');
+            } else {
+                activeContracts.forEach(c => {
+                    const timeLeft = Math.round((c.endTime - Date.now()) / 60000);
+                    console.log(` • MsgID: ${c.msgId} | Creator: ${c.creatorId} | Осталось: ${timeLeft > 0 ? timeLeft + ' мин.' : 'Истекло'}`);
+                });
+            }
+            console.log('------------------------------------\n');
+            return await msg.reply('✅ Список контрактов выведен в консоль Railway.');
+        }
 
+        // ЛОГИКА ДЛЯ ИМПОРТА И ЗАКРЫТИЯ
+        if (!msg.reference) return await msg.reply('❌ Ответь на сообщение!');
         try {
             const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
             if (msg.content.startsWith('!импорт_контракт')) {
