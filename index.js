@@ -34,8 +34,7 @@ const commands = [
     new SlashCommandBuilder().setName('чек_контракты').setDescription('Принудительно проверить все таймеры')
 ];
 
-// ИСПРАВЛЕНО: clientReady → ready
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
@@ -86,17 +85,24 @@ client.on('messageCreate', async msg => {
             const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
             if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
 
+            // ── Логирование подтверждения ────────────────────────
+            console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
+            console.log(`[LOG] Контракт: ${targetMsg.embeds[0]?.title || 'неизвестно'}`);
+
             let totalPaid = 0;
             targetMsg.embeds[0].fields.forEach(field => {
                 const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
                 if (amount > 0) {
                     db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
+                    const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
+                    console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
                     totalPaid += amount;
                 }
             });
 
             db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
             if (totalPaid > 0) db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);
+            console.log(`[LOG] Итого в казну: ${totalPaid.toLocaleString()} $`);
 
             await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
             await msg.reply('✅ Контракт закрыт, долги обновлены.');
@@ -160,6 +166,8 @@ client.on('interactionCreate', async i => {
             console.log(`[LOG] Кнопка: ${i.customId} от ${i.user.tag}`);
 
             if (i.customId === 'start') {
+                // ── Логирование открытия формы ───────────────────────
+                console.log(`[LOG] Открыта форма создания контракта от ${i.user.tag}`);
                 const modal = new ModalBuilder().setCustomId('m').setTitle('Создание контракта').addComponents(
                     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('n').setLabel('Название').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('Ограбление')),
                     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nicknames').setLabel('Ники (через ;)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('Artem Minoru;Yuto Minoru')),
@@ -170,7 +178,6 @@ client.on('interactionCreate', async i => {
             }
 
             if (i.customId === 'succ' || i.customId === 'fail') {
-                // Получаем контракт ДО deferUpdate
                 const contract = db.prepare('SELECT creatorId FROM active_contracts WHERE msgId = ?').get(i.message.id);
                 if (!contract) return i.reply({ content: '❌ Контракт не найден.', flags: [MessageFlags.Ephemeral] });
 
@@ -196,7 +203,11 @@ client.on('interactionCreate', async i => {
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const multiplier = isSuccess ? (participants.length >= 2 ? 0.2 : 0.4) : (participants.length >= 2 ? 0.3 : 0.5);
 
-                // ИСПРАВЛЕНО: embed оплаты с исполнителем и инструкцией
+                // ── Логирование кнопки succ/fail ─────────────────────
+                console.log(`[LOG] Контракт "${oldEmbed.title}" завершён как ${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'} пользователем ${i.user.tag}`);
+                console.log(`[LOG] Участники:`);
+                participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
+
                 const payEmbed = new EmbedBuilder()
                     .setTitle(oldEmbed.title)
                     .setColor(isSuccess ? 0x00FF00 : 0xFF0000)
@@ -220,10 +231,9 @@ client.on('interactionCreate', async i => {
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    // ИСПРАВЛЕНО: пингуем все роли из ALLOWED_ROLES
                     const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
                     await payChannel.send({
-                        content: rolePings,
+                        content: `${rolePings}`,
                         embeds: [payEmbed],
                         components: [new ActionRowBuilder().addComponents(
                             new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
@@ -261,22 +271,15 @@ client.on('interactionCreate', async i => {
 
             const nicknames = nicknamesRaw.split(';');
             const bills = billsRaw.split(';');
-
             if (nicknames.length !== bills.length) return i.editReply('❌ Количество ников не совпадает с количеством векселей.');
 
             const [h, m] = timeRaw.split(':').map(Number);
             const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
 
-            // ИСПРАВЛЕНО: исполнитель в embed
-            const embed = new EmbedBuilder()
-                .setTitle(name)
-                .setColor(0x0099FF)
-                .setDescription(`Контракт взял: <@${i.user.id}>`);
-
+            const embed = new EmbedBuilder().setTitle(name).setColor(0x0099FF);
             nicknames.forEach((nick, idx) => {
                 embed.addFields({ name: nick.trim(), value: `Векселей: ${bills[idx] || 0}`, inline: false });
             });
-
             embed.addFields(
                 { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
                 { name: 'ИНСТРУКЦИЯ', value: 'После таймера нажмите кнопку.', inline: false }
@@ -284,6 +287,7 @@ client.on('interactionCreate', async i => {
 
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
             const msg = await processChannel.send({
+                content: `Контракт взял: <@${i.user.id}>`,
                 embeds: [embed],
                 components: [new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success),
@@ -294,11 +298,23 @@ client.on('interactionCreate', async i => {
             db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)').run(msg.id, i.user.id, endTime, msg.channelId);
             setupTimer(msg.channel, i.user.id, endTime);
 
-            console.log(`[RESULT] Контракт создан от ${i.user.tag}.`);
+            // ── Логирование создания контракта ───────────────────
+            console.log(`[RESULT] Контракт "${name}" создан от ${i.user.tag}`);
+            console.log(`[LOG] Участники:`);
+            nicknames.forEach((nick, idx) => console.log(`   -> ${nick.trim()}: ${bills[idx] || 0} векселей`));
+
             await i.editReply('✅ Контракт успешно создан!');
         }
 
     } catch (err) { console.error('Ошибка взаимодействия:', err); }
 });
+
+const shutdown = () => {
+    try { db.close(); } catch (err) { console.error(err); }
+    client.destroy();
+    process.exit(0);
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 client.login(process.env.TOKEN);
