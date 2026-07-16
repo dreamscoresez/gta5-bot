@@ -61,7 +61,7 @@ client.once('clientReady', async () => {
         try {
             const channel = await client.channels.fetch(contract.channelId);
             if (Date.now() >= contract.endTime) {
-                await channel.send(`⚠️ **ВРЕМЯ КОНТРАКТА ВЫШЛО!** <@${contract.creatorId}>, проверьте и закройте его.`);
+                await channel.send(`⚠️ **ВРЕМЯ КОНТРАКТА ВЫШЛО!** <@${contract.creatorId}>, проверьте и закройте контракт после того как он завершится в игре!`);
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(contract.msgId);
             } else {
                 setupTimer(channel, contract.creatorId, contract.endTime);
@@ -338,7 +338,8 @@ client.on('interactionCreate', async i => {
                     .setDescription(
                         `**Исполнитель:** <@${contract.creatorId}>\n\n` +
                         `<@${contract.creatorId}>, внесите сумму в казну и нажмите кнопку **Оплатить**\n` +
-                        `**Проверяющий:** после оплаты ответьте на это сообщение командой \`!подтвердить\``
+                        `**Проверяющий:** после оплаты ответьте на это сообщение командой \`!подтвердить\`\n` +
+                        `**Оплатить нужно в течении 72 часов**`
                     );
 
                 participants.forEach(f => {
