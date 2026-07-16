@@ -178,13 +178,15 @@ client.on('interactionCreate', async i => {
             console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
 
             // ДОБАВЛЯЕМ СЮДА ЛОГИКУ ДЛЯ /контракт_список
-            if (msg.content.startsWith('!список')) {
-            const activeContracts = db.prepare('SELECT msgId, channelId FROM active_contracts').all();
-            let text = `📋 **АКТИВНЫЕ КОНТРАКТЫ (${activeContracts.length}):**\n\n`;
-            
-            if (activeContracts.length === 0) {
-                text += ' - Активных контрактов нет.';
-            } else {
+                if (i.commandName === 'контракт_список') {
+                const activeContracts = db.prepare('SELECT msgId, channelId FROM active_contracts').all();
+                
+                if (activeContracts.length === 0) {
+                    return i.reply({ content: '📋 Активных контрактов нет.', flags: [MessageFlags.Ephemeral] });
+                }
+
+                let text = `📋 **АКТИВНЫЕ КОНТРАКТЫ (${activeContracts.length}):**\n\n`;
+                
                 for (const c of activeContracts) {
                     try {
                         const channel = await client.channels.fetch(c.channelId);
@@ -195,9 +197,8 @@ client.on('interactionCreate', async i => {
                         text += ` • ID: ${c.msgId} (Сообщение недоступно)\n`;
                     }
                 }
+                return i.reply({ content: text, flags: [MessageFlags.Ephemeral] });
             }
-            return await msg.reply(text);
-        }
             console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
 
             if (i.commandName === 'казна') {
