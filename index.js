@@ -93,7 +93,7 @@ client.on('messageCreate', async msg => {
 
         try {
             const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
-            if (targetMsg.author.id !== client.user.id || !targetMsg.content.includes('⏳')) {
+            if (targetMsg.author.id !== client.user.id || !targetMsg.content.includes('⏳') && !targetMsg.embeds.length) {
                 return await msg.reply('❌ Ошибка! Это не сообщение с ожиданием оплаты.');
             }
 
@@ -202,6 +202,12 @@ client.on('interactionCreate', async i => {
                 db.prepare('INSERT INTO contract_history (msgId, creatorId, status, finishedAt) VALUES (?, ?, ?, ?)').run(i.message.id, i.user.id, isSuccess ? 'success' : 'fail', new Date().toISOString());
                 
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
+                
+                // --- ЛОГИРОВАНИЕ ДЕТАЛЕЙ КОНТРАКТА ---
+                console.log(`[LOG] Завершен контракт: ${oldEmbed.title}`);
+                console.log(`[LOG] Участники контракта:`);
+                participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
+                
                 const count = participants.length;
                 const multiplier = isSuccess ? (count >= 2 ? 0.2 : 0.4) : (count >= 2 ? 0.3 : 0.5);
                 
