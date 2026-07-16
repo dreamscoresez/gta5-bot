@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ModalBuilder, ApplicationCommandType, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const db = require('./database');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
@@ -32,7 +32,10 @@ const commands = [
     new SlashCommandBuilder().setName('долг_добавить').setDescription('Добавить должника').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
     new SlashCommandBuilder().setName('оплачено').setDescription('Закрыть долг').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
     new SlashCommandBuilder().setName('чек_контракты').setDescription('Принудительно проверить все таймеры'),
-    new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота')
+    new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота'),
+    new SlashCommandBuilder().setName('контракт_список').setDescription('Список активных контрактов'),
+    { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
+    { name: 'Закрыть контракт', type: ApplicationCommandType.Message }
 ];
 
 client.once('clientReady', async () => {
@@ -155,7 +158,37 @@ client.on('messageCreate', async msg => {
 
 client.on('interactionCreate', async i => {
     try {
+        // --- 1. ДОБАВЛЯЕМ ОБРАБОТКУ КОНТЕКСТНОГО МЕНЮ ---
+        if (i.isMessageContextMenuCommand()) {
+            const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+            if (!hasRole) return i.reply({ content: '❌ Нет прав.', flags: [MessageFlags.Ephemeral] });
+
+            if (i.commandName === 'Импортировать контракт') {
+                db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)')
+                    .run(i.targetMessage.id, i.targetMessage.author.id, Date.now() + 86400000, i.targetMessage.channelId);
+                return i.reply({ content: '✅ Импортировано.', flags: [MessageFlags.Ephemeral] });
+            }
+            if (i.commandName === 'Закрыть контракт') {
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.targetMessage.id);
+                await i.targetMessage.edit({ components: [] }).catch(() => {});
+                return i.reply({ content: '✅ Закрыто.', flags: [MessageFlags.Ephemeral] });
+            }
+        }
         if (i.isChatInputCommand()) {
+            console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
+
+            // ДОБАВЛЯЕМ СЮДА ЛОГИКУ ДЛЯ /контракт_список
+            if (i.commandName === 'контракт_список') {
+                const activeContracts = db.prepare('SELECT msgId, channelId, endTime FROM active_contracts').all();
+                if (activeContracts.length === 0) return i.reply({ content: '📋 Нет активных контрактов.', flags: [MessageFlags.Ephemeral] });
+                
+                let text = '📋 **АКТИВНЫЕ КОНТРАКТЫ:**\n\n';
+                for (const c of activeContracts) {
+                    const timeLeft = Math.round((c.endTime - Date.now()) / 60000);
+                    text += `• ID сообщения: ${c.msgId} | Осталось: ${timeLeft > 0 ? timeLeft + ' мин.' : 'Истекло'}\n`;
+                }
+                return i.reply({ content: text, flags: [MessageFlags.Ephemeral] });
+            }
             console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
 
             if (i.commandName === 'казна') {
