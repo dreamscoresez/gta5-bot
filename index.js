@@ -225,6 +225,7 @@ client.on('interactionCreate', async i => {
                 embed.addFields({ name: nick.trim(), value: `Векселей: ${bills[idx] || 0}`, inline: false });
             });
             embed.addFields({ name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false });
+            embed.addFields({ name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал".', inline: false });
             
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
             const msg = await processChannel.send({ 
