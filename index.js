@@ -311,6 +311,7 @@ client.on('interactionCreate', async i => {
             
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
             const msg = await processChannel.send({
+                content: `Контракт взял: <@${i.user.id}>`,
                 embeds: [embed],
                 components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger))]
             });
