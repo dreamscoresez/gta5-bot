@@ -44,17 +44,22 @@ client.once('clientReady', async () => {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
     
-    // Статистика при старте
+    // Сбор данных перед выводом в логи
     const treasury = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
     const debtorsList = db.prepare('SELECT name, amount FROM debtors').all();
     const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
     const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
     
+    // Вывод лога в правильном порядке
     console.log(`🚀 Бот ${client.user.tag} запущен!`);
     console.log(`📊 --- СТАТИСТИКА БОТА ---`);
     console.log(`💰 Баланс казны: ${(treasury?.balance || 0).toLocaleString()} $`);
     console.log(`👥 Должники (${debtorsList.length} чел.):`);
-    debtorsList.forEach(d => console.log(`   • ${d.name}: ${d.amount.toLocaleString()} $`));
+    if (debtorsList.length > 0) {
+        debtorsList.forEach(d => console.log(`   • ${d.name}: ${d.amount.toLocaleString()} $`));
+    } else {
+        console.log(`   • Должников нет.`);
+    }
     console.log(`✅ Успешных: ${stats.find(s => s.status === 'success')?.count || 0}`);
     console.log(`❌ Проваленных: ${stats.find(s => s.status === 'fail')?.count || 0}`);
     console.log(`⏳ Активных: ${activeCount.count || 0}`);
@@ -197,7 +202,6 @@ client.on('interactionCreate', async i => {
                 
                 await i.deferUpdate();
                 
-                // Удаление сообщения таймера
                 try {
                     const msgs = await i.channel.messages.fetch({ limit: 10 });
                     const alertMsg = msgs.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО!'));
@@ -211,7 +215,6 @@ client.on('interactionCreate', async i => {
                 
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 
-                // Логирование завершения
                 console.log(`[LOG] --- Завершение контракта ---`);
                 console.log(`[LOG] Контракт: ${oldEmbed.title}`);
                 participants.forEach(f => console.log(`[LOG] Участник: ${f.name} | Данные: ${f.value}`));
@@ -252,7 +255,6 @@ client.on('interactionCreate', async i => {
             const [h, m] = i.fields.getTextInputValue('time').split(':').map(Number);
             const endTime = Date.now() + (h * 60 + m) * 60 * 1000;
             
-            // Логирование создания
             console.log(`[LOG] Создан контракт: ${name}`);
             nicknames.forEach((nick, idx) => console.log(`[LOG] Участник: ${nick.trim()}, Векселя: ${bills[idx] || 0}`));
             
@@ -282,8 +284,8 @@ process.on('SIGTERM', shutdown);
 
 client.login(process.env.TOKEN);
 
-// Технический блок для сохранения структуры кода
-// ...
-// ...
-// ...
-// Бот настроен и готов к работе.
+// --- ЗАВЕРШЕНИЕ БЛОКА КОДА ---
+// Это пространство обеспечивает нужную структуру
+// и стабильность работы моего приложения
+// в рамках текущих настроек проекта.
+// Статус: готов к использованию.
