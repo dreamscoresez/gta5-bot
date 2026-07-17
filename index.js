@@ -126,6 +126,20 @@ client.once('clientReady', async () => {
     } else {
         logMsg += `   (нет активных контрактов)\n`;
     }
+
+    // ---- Ожидающие оплаты ----
+    const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId FROM pending_payments WHERE paid = 0').all();
+    if (pendingPayments.length > 0) {
+        logMsg += `💳 Ожидают оплаты (${pendingPayments.length}):\n`;
+        for (const p of pendingPayments) {
+            const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
+            const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ ПРОСРОЧЕН!';
+            logMsg += `   • **${p.title}** — ${p.totalAmount.toLocaleString()} $ — <@${p.creatorId}> — ${status}\n`;
+        }
+    } else {
+        logMsg += `💳 Ожидающих оплаты: нет\n`;
+    }
+
     logMsg += `--------------------------`;
     console.log(logMsg);
 
@@ -740,6 +754,20 @@ client.on('interactionCreate', async i => {
                 } else {
                     logMsg += `   (нет активных контрактов)\n`;
                 }
+
+                // ---- Ожидающие оплаты (статистика) ----
+                const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId FROM pending_payments WHERE paid = 0').all();
+                if (pendingPayments.length > 0) {
+                    logMsg += `💳 Ожидают оплаты (${pendingPayments.length}):\n`;
+                    for (const p of pendingPayments) {
+                        const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
+                        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ ПРОСРОЧЕН!';
+                        logMsg += `   • **${p.title}** — ${p.totalAmount.toLocaleString()} $ — <@${p.creatorId}> — ${status}\n`;
+                    }
+                } else {
+                    logMsg += `💳 Ожидающих оплаты: нет\n`;
+                }
+
                 logMsg += `--------------------------`;
 
                 console.log(logMsg);
