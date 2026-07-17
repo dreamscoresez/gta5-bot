@@ -504,7 +504,6 @@ client.on('interactionCreate', async i => {
                 await i.deferReply({ flags: [MessageFlags.Ephemeral] });
                 const targetMsg = i.targetMessage;
 
-                // Проверяем, что это сообщение с платежом
                 if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
                     return i.editReply({ content: '❌ Это не сообщение с платежом. Должен быть embed со списком долгов.' });
                 }
@@ -515,6 +514,7 @@ client.on('interactionCreate', async i => {
                 console.log(`[LOG] Принудительная оплата от ${i.user.tag} для контракта "${contractTitle}"`);
 
                 let totalPaid = 0;
+                const paidDetails = [];
                 embed.fields.forEach(field => {
                     const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
                     if (amount > 0) {
@@ -522,6 +522,7 @@ client.on('interactionCreate', async i => {
                         const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
                         console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
                         totalPaid += amount;
+                        paidDetails.push({ name: field.name, amount: amount });
                     }
                 });
 
@@ -536,9 +537,20 @@ client.on('interactionCreate', async i => {
                     console.log(`[DB] Удалена запись из pending_payments для сообщения ${paymentMsgId}`);
                 }
 
-                // Редактируем сообщение (убираем кнопку, отмечаем оплату)
+                // Формируем подробное сообщение
+                let details = `📋 **${contractTitle}**\n`;
+                if (paidDetails.length > 0) {
+                    paidDetails.forEach(p => {
+                        details += `• **${p.name}**: ${p.amount.toLocaleString()} $\n`;
+                    });
+                } else {
+                    details += '*(данные о платеже отсутствуют)*\n';
+                }
+                details += `\n✅ **Оплата подтверждена принудительно!** Проверяющий: <@${i.user.id}>`;
+
+                // Пытаемся отредактировать исходное сообщение
                 try {
-                    await targetMsg.edit({ content: `✅ **Оплата подтверждена принудительно! Проверяющий: <@${i.user.id}>**`, components: [] });
+                    await targetMsg.edit({ content: details, components: [] });
                 } catch (editErr) {
                     console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем новое:', editErr);
                     try {
@@ -546,7 +558,7 @@ client.on('interactionCreate', async i => {
                     } catch (deleteErr) {
                         console.warn('Не удалось удалить исходное сообщение:', deleteErr);
                     }
-                    await i.channel.send(`✅ **Оплата подтверждена принудительно! Проверяющий: <@${i.user.id}>**`);
+                    await i.channel.send(details);
                 }
 
                 await i.editReply({ content: `✅ Оплата по контракту "${contractTitle}" проведена принудительно. Сумма: ${totalPaid.toLocaleString()} $` });
