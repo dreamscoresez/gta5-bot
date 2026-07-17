@@ -55,15 +55,20 @@ const commands = [
 ];
 
 client.once('clientReady', async () => {
-        // ---- Автоматическое создание колонки title, если её нет ----
+    // ---- Автоматическое создание колонок title и closedAt, если их нет ----
     try {
         const tableInfo = db.prepare("PRAGMA table_info(contract_history)").all();
-        if (!tableInfo.some(col => col.name === 'title')) {
+        const columnNames = tableInfo.map(col => col.name);
+        if (!columnNames.includes('title')) {
             db.prepare("ALTER TABLE contract_history ADD COLUMN title TEXT").run();
-            console.log('[DB] Добавлена колонка title в contract_history');
+            console.log('[DB] Добавлена колонка title');
+        }
+        if (!columnNames.includes('closedAt')) {
+            db.prepare("ALTER TABLE contract_history ADD COLUMN closedAt INTEGER").run();
+            console.log('[DB] Добавлена колонка closedAt');
         }
     } catch (err) {
-        console.error('[DB] Ошибка при добавлении колонки title:', err);
+        console.error('[DB] Ошибка при добавлении колонок:', err);
     }
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
