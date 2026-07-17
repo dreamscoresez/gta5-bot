@@ -68,7 +68,26 @@ client.once('clientReady', async () => {
     logMsg += `👥 Должники (${debtorsList.length} чел.):\n`;
     debtorsList.forEach(d => { logMsg += `   • ${d.name}: ${d.amount.toLocaleString()} $\n`; });
     logMsg += `📦 Закрыто контрактов: ${totalClosed?.count || 0}\n`;
-    logMsg += `⏳ Активных: ${activeCount.count || 0}\n--------------------------`;
+    logMsg += `⏳ Активных контрактов: ${activeCount.count || 0}\n`;
+
+    // Добавляем список активных контрактов с названиями
+    const activeContractsForLog = db.prepare('SELECT * FROM active_contracts').all();
+    if (activeContractsForLog.length > 0) {
+        logMsg += `📋 Список активных контрактов:\n`;
+        for (const contract of activeContractsForLog) {
+            try {
+                const channel = await client.channels.fetch(contract.channelId);
+                const targetMsg = await channel.messages.fetch(contract.msgId);
+                const title = targetMsg.embeds[0]?.title || 'Без названия';
+                logMsg += `   • **${title}** (ID: ${contract.msgId})\n`;
+            } catch (e) {
+                logMsg += `   • ID: ${contract.msgId} (сообщение недоступно)\n`;
+            }
+        }
+    } else {
+        logMsg += `   (нет активных контрактов)\n`;
+    }
+    logMsg += `--------------------------`;
     console.log(logMsg);
 
     const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
@@ -479,12 +498,30 @@ client.on('interactionCreate', async i => {
                 const totalClosed = db.prepare('SELECT COUNT(*) as count FROM contract_history').get();
                 const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
 
-                let logMsg = `\n📊 --- СТАТИСТИКА БОТА (запрос от ${i.user.tag}) ---\n`;
+                let logMsg = `\n🚀 Бот ${client.user.tag} запущен!\n📊 --- СТАТИСТИКА БОТА ---\n`;
                 logMsg += `💰 Баланс казны: ${(treasury?.balance || 0).toLocaleString()} $\n`;
                 logMsg += `👥 Должники (${debtorsList.length} чел.):\n`;
                 debtorsList.forEach(d => { logMsg += `   • ${d.name}: ${d.amount.toLocaleString()} $\n`; });
                 logMsg += `📦 Закрыто контрактов: ${totalClosed?.count || 0}\n`;
                 logMsg += `⏳ Активных контрактов: ${activeCount.count || 0}\n`;
+
+                // Добавляем список активных контрактов с названиями
+                const activeContracts = db.prepare('SELECT * FROM active_contracts').all();
+                if (activeContracts.length > 0) {
+                    logMsg += `📋 Список активных контрактов:\n`;
+                    for (const contract of activeContracts) {
+                        try {
+                            const channel = await client.channels.fetch(contract.channelId);
+                            const targetMsg = await channel.messages.fetch(contract.msgId);
+                            const title = targetMsg.embeds[0]?.title || 'Без названия';
+                            logMsg += `   • **${title}** (ID: ${contract.msgId})\n`;
+                        } catch (e) {
+                            logMsg += `   • ID: ${contract.msgId} (сообщение недоступно)\n`;
+                        }
+                    }
+                } else {
+                    logMsg += `   (нет активных контрактов)\n`;
+                }
                 logMsg += `--------------------------`;
 
                 console.log(logMsg);
