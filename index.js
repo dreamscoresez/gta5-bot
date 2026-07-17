@@ -60,15 +60,14 @@ client.once('clientReady', async () => {
 
     const treasury = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
     const debtorsList = db.prepare('SELECT name, amount FROM debtors').all();
-    const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
+    const totalClosed = db.prepare('SELECT COUNT(*) as count FROM contract_history').get();
     const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
 
     let logMsg = `\n🚀 Бот ${client.user.tag} запущен!\n📊 --- СТАТИСТИКА БОТА ---\n`;
     logMsg += `💰 Баланс казны: ${(treasury?.balance || 0).toLocaleString()} $\n`;
     logMsg += `👥 Должники (${debtorsList.length} чел.):\n`;
     debtorsList.forEach(d => { logMsg += `   • ${d.name}: ${d.amount.toLocaleString()} $\n`; });
-    logMsg += `✅ Успешных: ${stats.find(s => s.status === 'success')?.count || 0}\n`;
-    logMsg += `❌ Проваленных: ${stats.find(s => s.status === 'fail')?.count || 0}\n`;
+    logMsg += `📦 Закрыто контрактов: ${totalClosed?.count || 0}\n`;
     logMsg += `⏳ Активных: ${activeCount.count || 0}\n--------------------------`;
     console.log(logMsg);
 
@@ -269,6 +268,11 @@ client.on('interactionCreate', async i => {
             // Удаляем запись из БД
             db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
 
+            // Добавляем запись в историю закрытых контрактов (для контекстного меню)
+            db.prepare('INSERT INTO contract_history (msgId, title, status, closedAt) VALUES (?, ?, ?, ?)')
+                .run(msgId, oldEmbed.title, 'closed', Date.now());
+            console.log(`[HISTORY] Контракт "${oldEmbed.title}" закрыт (msgId: ${msgId})`);
+
             // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
             try {
                 const recentMessages = await i.targetMessage.channel.messages.fetch({ limit: 20 });
@@ -401,8 +405,9 @@ client.on('interactionCreate', async i => {
                     }
                 }
                 return i.reply({ content: text, flags: [MessageFlags.Ephemeral] });
-            }
-            console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
+            } // <-- закрывает if (контракт_список)
+
+            // Удалён дублирующий console.log
 
             if (i.commandName === 'казна') {
                 const row = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
@@ -448,12 +453,22 @@ client.on('interactionCreate', async i => {
             if (['пополнить', 'вычесть', 'долг_добавить', 'оплачено'].includes(i.commandName)) {
                 const amt = i.options.getInteger('сумма') || 0;
                 const nick = i.options.getString('ник');
-                if (i.commandName === 'пополнить') db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(amt);
-                if (i.commandName === 'вычесть') db.prepare('UPDATE treasury SET balance = balance - ? WHERE id = 1').run(amt);
-                if (i.commandName === 'долг_добавить') db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, ?)').run(nick, amt);
+                if (i.commandName === 'пополнить') {
+                    db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(amt);
+                    console.log(`[LOG] /пополнить: +${amt} $ (казну пополнил ${i.user.tag})`);
+                }
+                if (i.commandName === 'вычесть') {
+                    db.prepare('UPDATE treasury SET balance = balance - ? WHERE id = 1').run(amt);
+                    console.log(`[LOG] /вычесть: -${amt} $ (списал ${i.user.tag})`);
+                }
+                if (i.commandName === 'долг_добавить') {
+                    db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, ?)').run(nick, amt);
+                    console.log(`[LOG] /долг_добавить: ${nick} +${amt} $ (добавил ${i.user.tag})`);
+                }
                 if (i.commandName === 'оплачено') {
                     db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amt, nick);
                     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
+                    console.log(`[LOG] /оплачено: ${nick} -${amt} $ (закрыл ${i.user.tag})`);
                 }
                 return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
             }
@@ -461,15 +476,14 @@ client.on('interactionCreate', async i => {
             if (i.commandName === 'статистика') {
                 const treasury = db.prepare('SELECT balance FROM treasury WHERE id = 1').get();
                 const debtorsList = db.prepare('SELECT name, amount FROM debtors').all();
-                const stats = db.prepare('SELECT status, COUNT(*) as count FROM contract_history GROUP BY status').all();
+                const totalClosed = db.prepare('SELECT COUNT(*) as count FROM contract_history').get();
                 const activeCount = db.prepare('SELECT COUNT(*) as count FROM active_contracts').get();
 
                 let logMsg = `\n📊 --- СТАТИСТИКА БОТА (запрос от ${i.user.tag}) ---\n`;
                 logMsg += `💰 Баланс казны: ${(treasury?.balance || 0).toLocaleString()} $\n`;
                 logMsg += `👥 Должники (${debtorsList.length} чел.):\n`;
                 debtorsList.forEach(d => { logMsg += `   • ${d.name}: ${d.amount.toLocaleString()} $\n`; });
-                logMsg += `✅ Успешных: ${stats.find(s => s.status === 'success')?.count || 0}\n`;
-                logMsg += `❌ Проваленных: ${stats.find(s => s.status === 'fail')?.count || 0}\n`;
+                logMsg += `📦 Закрыто контрактов: ${totalClosed?.count || 0}\n`;
                 logMsg += `⏳ Активных контрактов: ${activeCount.count || 0}\n`;
                 logMsg += `--------------------------`;
 
@@ -514,6 +528,11 @@ client.on('interactionCreate', async i => {
 
                 await i.deferUpdate();
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
+
+                // Добавляем запись в историю закрытых контрактов (для кнопки)
+                db.prepare('INSERT INTO contract_history (msgId, title, status, closedAt) VALUES (?, ?, ?, ?)')
+                    .run(i.message.id, oldEmbed.title, 'closed', Date.now());
+                console.log(`[HISTORY] Контракт "${oldEmbed.title}" закрыт (msgId: ${i.message.id})`);
 
                 // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
                 try {
