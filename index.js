@@ -36,7 +36,15 @@ const commands = [
     new SlashCommandBuilder().setName('контракт_список').setDescription('Список активных контрактов'),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
     { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
-    { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message }
+    { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
+        new SlashCommandBuilder()
+        .setName('удалить_контракт')
+        .setDescription('Принудительно удалить контракт из БД (без редактирования сообщения)')
+        .addStringOption(o => o
+            .setName('msgid')
+            .setDescription('ID сообщения с контрактом')
+            .setRequired(true)
+        )
 ];
 
 client.once('clientReady', async () => {
@@ -246,6 +254,17 @@ client.on('interactionCreate', async i => {
                     content: "Правила работы с контрактами Minoru\nУважаемые<@&1373750905274630275><@&1373750899649806449><@&1392858292925108254>, ознакомьтесь с правилами работы. Вы обязаны следить за каналами <#1526654909452390531> и <#1403074323614404738> на наличие вашего никнейма.\n\n1. 📝 Создание контракта 📝\nПосле того как вы взяли контракт в игре, нажмите кнопку [Создать контракт] под этим сообщением.\nВ открывшейся панели заполните все необходимые данные по контракту.\n2. ⚖️ Процентные ставки ⚖️\n**Соло-контракт:** 40% (успех)\n**Группа (2+ человека):** 20% (успех).\nНа контракты пикнутые не в 100% сразу будет налогаться штраф в виде фиксированной суммы 40.000$ В случае успеха контракта, будет все так-же процентно для соло или группы.\n3. 💰 Оплата и штрафы 💰\n**Скриншот:** Присылается в обязательном порядке.\n**Срок оплаты:** 72 часа с момента создания контракта.\n**Просрочка (72ч+):** Сумма увеличивается в 1.25 раза. На оплату этой суммы дается еще 48 часов.\n**Критическая просрочка (120ч+):** Накладывается «мороз» на 48 часов. Если оплата не поступит в этот срок — АФК-ранг до погашения долга.\n4. ⚠️ Регистрация контрактов ⚠️\nРегистрация контракта **обязательна**. Если контракт завершен, а данных о нем нет в канале — на игрока накладывается штраф: 30% от полученной суммы.\n\nПо всем вопросам обращаться к: <@702529657718833162>",
                     components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('start').setLabel('Создать контракт').setStyle(ButtonStyle.Primary))]
                 });
+            }
+            if (i.commandName === 'удалить_контракт') {
+                const msgId = i.options.getString('msgid');
+                const result = db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
+            if (result.changes > 0) {
+                    await i.reply({ content: `✅ Контракт с ID \`${msgId}\` успешно удалён из БД.`, flags: [MessageFlags.Ephemeral] });
+                    console.log(`[LOG] /удалить_контракт ${msgId} от ${i.user.tag}`);
+            } else {
+                    await i.reply({ content: `❌ Контракт с ID \`${msgId}\` не найден.`, flags: [MessageFlags.Ephemeral] });
+                }
+            return;
             }
 
             if (i.commandName === 'чек_контракты') {
