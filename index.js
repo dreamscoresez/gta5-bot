@@ -55,6 +55,16 @@ const commands = [
 ];
 
 client.once('clientReady', async () => {
+        // ---- Автоматическое создание колонки title, если её нет ----
+    try {
+        const tableInfo = db.prepare("PRAGMA table_info(contract_history)").all();
+        if (!tableInfo.some(col => col.name === 'title')) {
+            db.prepare("ALTER TABLE contract_history ADD COLUMN title TEXT").run();
+            console.log('[DB] Добавлена колонка title в contract_history');
+        }
+    } catch (err) {
+        console.error('[DB] Ошибка при добавлении колонки title:', err);
+    }
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
