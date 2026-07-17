@@ -134,52 +134,57 @@ client.on('messageCreate', async msg => {
         return;
     }
 
-    if (msg.channel.id === CONFIG.PAY && msg.content.trim() === '!подтвердить') {
-        const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-        if (!hasRole) return await msg.reply('❌ У вас нет прав проверяющего.');
-        if (!msg.reference || !msg.reference.messageId) return await msg.reply('❌ Ответьте на сообщение с контрактом.');
+        if (msg.channel.id === CONFIG.PAY && msg.content.trim() === '!подтвердить') {
+            const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+            if (!hasRole) return await msg.reply('❌ У вас нет прав проверяющего.');
+            if (!msg.reference || !msg.reference.messageId) return await msg.reply('❌ Ответьте на сообщение с контрактом.');
 
-        try {
-            const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
-            if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
-                        // Проверяем, что это сообщение с платежом
-            if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
-                return await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
-            }
+            try {
+                const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
+                if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
 
-            // ── Логирование подтверждения ────────────────────────
-            console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
-            console.log(`[LOG] Контракт: ${targetMsg.embeds[0]?.title || 'неизвестно'}`);
-
-            let totalPaid = 0;
-            targetMsg.embeds[0].fields.forEach(field => {
-                const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
-                if (amount > 0) {
-                    db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
-                    const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
-                    console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
-                    totalPaid += amount;
+                // Проверяем, что это сообщение с платежом
+                if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
+                    return await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
                 }
-            });
 
-            db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
-            if (totalPaid > 0) db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);
-            console.log(`[LOG] Итого в казну: ${totalPaid.toLocaleString()} $`);
+                console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
+                console.log(`[LOG] Контракт: ${targetMsg.embeds[0]?.title || 'неизвестно'}`);
 
-            await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
-            
-            // Вставляем логику удаления:
-            const replyMsg = await msg.reply('✅ Контракт закрыт, долги обновлены.');
-            setTimeout(async () => {
-                await msg.delete().catch(() => {});
-                await replyMsg.delete().catch(() => {});
-            }, 5000); 
+                let totalPaid = 0;
+                targetMsg.embeds[0].fields.forEach(field => {
+                    const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
+                    if (amount > 0) {
+                        db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
+                        const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
+                        console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
+                        totalPaid += amount;
+                    }
+                });
 
-        } catch (err) {
-            console.error(err);
-            await msg.reply('❌ Ошибка при поиске сообщения.');
+                db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
+                if (totalPaid > 0) db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);
+                console.log(`[LOG] Итого в казну: ${totalPaid.toLocaleString()} $`);
+
+                // Редактируем, оборачивая в try/catch
+                try {
+                    await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
+                } catch (editErr) {
+                    console.warn('Не удалось отредактировать исходное сообщение:', editErr);
+                    await msg.reply(`✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`);
+                }
+
+                const replyMsg = await msg.reply('✅ Контракт закрыт, долги обновлены.');
+                setTimeout(async () => {
+                    await msg.delete().catch(() => {});
+                    await replyMsg.delete().catch(() => {});
+                }, 5000);
+
+            } catch (err) {
+                console.error(err);
+                await msg.reply('❌ Ошибка при поиске сообщения.');
+            }
         }
-    }
 });
 
 client.on('interactionCreate', async i => {
