@@ -1,4 +1,10 @@
 require('dotenv').config();
+if (!process.env.TOKEN) {
+    console.error('❌ ТОКЕН НЕ ЗАГРУЖЕН!');
+    process.exit(1);
+} else {
+    console.log(`✅ Токен загружен: ${process.env.TOKEN.substring(0, 15)}...`);
+}
 const { Client, GatewayIntentBits, ModalBuilder, ApplicationCommandType, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const db = require('./database');
 
