@@ -142,6 +142,10 @@ client.on('messageCreate', async msg => {
         try {
             const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
             if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
+                        // Проверяем, что это сообщение с платежом
+            if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
+                return await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
+            }
 
             // ── Логирование подтверждения ────────────────────────
             console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
@@ -585,7 +589,7 @@ client.on('interactionCreate', async i => {
                 content: `Контракт взял: <@${i.user.id}>`,
                 embeds: [embed],
                 components: [new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('close').setLabel('Закрыть контракт').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('close').setLabel('Закрыть контракт').setStyle(ButtonStyle.Primary)
                 )]
             });
 
