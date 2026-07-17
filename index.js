@@ -9,6 +9,7 @@ const { Client, GatewayIntentBits, ModalBuilder, ApplicationCommandType, TextInp
 const db = require('./database');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+if (!global.pendingMessages) global.pendingMessages = new Map();
 
 process.on('unhandledRejection', error => { console.error('Unhandled rejection:', error); });
 process.on('uncaughtException', err => { console.error('Uncaught exception:', err); });
@@ -88,13 +89,10 @@ client.once('clientReady', async () => {
 
 client.on('messageCreate', async msg => {
     if (msg.author.bot) return;
-// --- АДМИН КОМАНДЫ ---
-    // Этот блок теперь включает !импорт_контракт, !закрыть_контракт и !список
+    // --- АДМИН КОМАНДЫ ---
     if (msg.content.startsWith('!импорт_контракт') || msg.content.startsWith('!закрыть_контракт') || msg.content.startsWith('!список')) {
         const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
         if (!hasRole) return await msg.reply('❌ Нет прав.');
-        
-        // ЛОГИКА ДЛЯ !список
         if (msg.content.startsWith('!список')) {
             const activeContracts = db.prepare('SELECT msgId, creatorId, endTime FROM active_contracts').all();
             console.log(`\n📋 АКТИВНЫЕ КОНТРАКТЫ (${activeContracts.length}):`);
@@ -109,8 +107,6 @@ client.on('messageCreate', async msg => {
             console.log('------------------------------------\n');
             return await msg.reply('✅ Список контрактов выведен в консоль Railway.');
         }
-
-        // ЛОГИКА ДЛЯ ИМПОРТА И ЗАКРЫТИЯ
         if (!msg.reference) return await msg.reply('❌ Ответь на сообщение!');
         try {
             const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
@@ -125,8 +121,9 @@ client.on('messageCreate', async msg => {
                 await msg.reply('✅ Закрыто.');
             }
         } catch (err) { await msg.reply('❌ Ошибка.'); }
-        return; 
+        return;
     }
+
     // ---------------------
     if ((msg.channel.id === CONFIG.PICK || msg.channel.id === CONFIG.PROCESS) && msg.content !== '!подтвердить') {
         await msg.delete().catch(() => {});
@@ -134,58 +131,79 @@ client.on('messageCreate', async msg => {
         return;
     }
 
-        if (msg.channel.id === CONFIG.PAY && msg.content.trim() === '!подтвердить') {
-            const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-            if (!hasRole) return await msg.reply('❌ У вас нет прав проверяющего.');
-            if (!msg.reference || !msg.reference.messageId) return await msg.reply('❌ Ответьте на сообщение с контрактом.');
+    // ---- Обработка !подтвердить ----
+    if (msg.channel.id === CONFIG.PAY && msg.content.trim() === '!подтвердить') {
+        const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+        if (!hasRole) return await msg.reply('❌ У вас нет прав проверяющего.');
+        if (!msg.reference || !msg.reference.messageId) return await msg.reply('❌ Ответьте на сообщение с контрактом.');
 
-            try {
-                const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
-                if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
+        try {
+            const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
+            if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
 
-                // Проверяем, что это сообщение с платежом
-                if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
-                    return await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
-                }
-
-                console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
-                console.log(`[LOG] Контракт: ${targetMsg.embeds[0]?.title || 'неизвестно'}`);
-
-                let totalPaid = 0;
-                targetMsg.embeds[0].fields.forEach(field => {
-                    const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
-                    if (amount > 0) {
-                        db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
-                        const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
-                        console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
-                        totalPaid += amount;
-                    }
-                });
-
-                db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
-                if (totalPaid > 0) db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);
-                console.log(`[LOG] Итого в казну: ${totalPaid.toLocaleString()} $`);
-
-                // Редактируем, оборачивая в try/catch
-                try {
-                    await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
-                } catch (editErr) {
-                    console.warn('Не удалось отредактировать исходное сообщение:', editErr);
-                    await msg.reply(`✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`);
-                }
-
-                const replyMsg = await msg.reply('✅ Контракт закрыт, долги обновлены.');
-                setTimeout(async () => {
-                    await msg.delete().catch(() => {});
-                    await replyMsg.delete().catch(() => {});
-                }, 5000);
-
-            } catch (err) {
-                console.error(err);
-                await msg.reply('❌ Ошибка при поиске сообщения.');
+            // Проверяем, что это сообщение с платежом
+            if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
+                return await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
             }
+
+            console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
+            console.log(`[LOG] Контракт: ${targetMsg.embeds[0]?.title || 'неизвестно'}`);
+
+            let totalPaid = 0;
+            targetMsg.embeds[0].fields.forEach(field => {
+                const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
+                if (amount > 0) {
+                    db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
+                    const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
+                    console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
+                    totalPaid += amount;
+                }
+            });
+
+            db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
+            if (totalPaid > 0) db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);
+            console.log(`[LOG] Итого в казну: ${totalPaid.toLocaleString()} $`);
+
+            // Редактируем или удаляем исходное сообщение с кнопкой
+            try {
+                await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
+            } catch (editErr) {
+                console.warn('Не удалось отредактировать исходное сообщение, удаляем:', editErr);
+                try {
+                    await targetMsg.delete();
+                } catch (deleteErr) {
+                    console.warn('Не удалось удалить исходное сообщение:', deleteErr);
+                }
+                await msg.channel.send(`✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`);
+            }
+
+            // Удаляем сообщение ожидания (если оно есть)
+            const pendingMsgId = global.pendingMessages?.get(targetMsg.id);
+            if (pendingMsgId) {
+                try {
+                    const pendingMsg = await msg.channel.messages.fetch(pendingMsgId);
+                    if (pendingMsg) {
+                        await pendingMsg.delete();
+                        console.log(`[DELETE] Удалено сообщение ожидания ${pendingMsgId}`);
+                    }
+                } catch (err) {
+                    console.warn('Не удалось найти/удалить сообщение ожидания:', err);
+                }
+                global.pendingMessages.delete(targetMsg.id);
+            }
+
+            const replyMsg = await msg.reply('✅ Контракт закрыт, долги обновлены.');
+            setTimeout(async () => {
+                await msg.delete().catch(() => {});
+                await replyMsg.delete().catch(() => {});
+            }, 5000);
+
+        } catch (err) {
+            console.error(err);
+            await msg.reply('❌ Ошибка при поиске сообщения.');
         }
-});
+    }
+}); // <-- закрывает messageCreate
 
 client.on('interactionCreate', async i => {
     try {
@@ -553,6 +571,14 @@ client.on('interactionCreate', async i => {
                 if (!messages.some(m => m.attachments.size > 0)) {
                     return i.reply({ content: '❌ Сначала прикрепите скриншот!', flags: [MessageFlags.Ephemeral] });
                 }
+                // Отправляем сообщение ожидания
+                const pendingMsg = await i.channel.send({
+                    content: `⏳ **Ожидание подтверждения...**\nОплата от <@${i.user.id}>. Проверяющий, ответьте на это сообщение командой \`!подтвердить\`.`,
+                    components: []
+                });
+                // Сохраняем ID сообщения ожидания в Map (ключ – ID сообщения с кнопкой, на котором нажали)
+                global.pendingMessages.set(i.message.id, pendingMsg.id);
+                // Редактируем исходное сообщение (убираем кнопку, оставляем "Ожидание...")
                 await i.update({
                     content: `⏳ **Ожидание подтверждения...**\nОплата от <@${i.user.id}>. Проверяющий, ответьте на это сообщение командой \`!подтвердить\`.`,
                     components: []
