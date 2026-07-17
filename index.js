@@ -35,7 +35,8 @@ const commands = [
     new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота'),
     new SlashCommandBuilder().setName('контракт_список').setDescription('Список активных контрактов'),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
-    { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
+    { name: 'Закрыть как успех', type: ApplicationCommandType.Message },
+    { name: 'Закрыть как провал', type: ApplicationCommandType.Message },   
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
         new SlashCommandBuilder()
         .setName('удалить_контракт')
@@ -184,10 +185,84 @@ client.on('interactionCreate', async i => {
                     .run(i.targetMessage.id, i.targetMessage.author.id, Date.now() + 86400000, i.targetMessage.channelId);
                 return i.reply({ content: '✅ Импортировано.', flags: [MessageFlags.Ephemeral] });
             }
-            if (i.commandName === 'Закрыть контракт') {
-                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.targetMessage.id);
-                await i.targetMessage.edit({ components: [] }).catch(() => {});
-                return i.reply({ content: '✅ Закрыто.', flags: [MessageFlags.Ephemeral] });
+            if (i.commandName === 'Закрыть как успех' || i.commandName === 'Закрыть как провал') {
+                const isSuccess = i.commandName === 'Закрыть как успех';
+                const msgId = i.targetMessage.id;
+                const contract = db.prepare('SELECT creatorId, channelId FROM active_contracts WHERE msgId = ?').get(msgId);
+                if (!contract) {
+                    return i.reply({ content: '❌ Контракт не найден или уже закрыт.', flags: [MessageFlags.Ephemeral] });
+                }
+
+                const oldEmbed = i.targetMessage.embeds[0];
+                if (!oldEmbed) {
+                    return i.reply({ content: '❌ Это не сообщение с контрактом.', flags: [MessageFlags.Ephemeral] });
+                }
+
+                // Проверка времени (можно убрать, если хочешь принудительно)
+                const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
+                if (timeField) {
+                    const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
+                    if (timestampMatch) {
+                        const endTime = parseInt(timestampMatch[1]) * 1000;
+                        if (Date.now() < endTime) {
+                            return i.reply({ content: '❌ Рано! Таймер ещё не истёк.', flags: [MessageFlags.Ephemeral] });
+                        }
+                    }
+                }
+
+                // Удаляем запись из БД
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
+
+                // Удаляем сообщение "ВРЕМЯ ВЫШЛО", если есть
+                try {
+                    const recentMessages = await i.targetMessage.channel.messages.fetch({ limit: 20 });
+                    const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
+                    if (timerMsg) await timerMsg.delete();
+                } catch (err) { /* игнорируем */ }
+
+                const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
+                const multiplier = isSuccess ? (participants.length >= 2 ? 0.2 : 0.4) : (participants.length >= 2 ? 0.3 : 0.5);
+
+                console.log(`[LOG] Контракт "${oldEmbed.title}" принудительно закрыт как ${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'} пользователем ${i.user.tag}`);
+                participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
+
+                const payEmbed = new EmbedBuilder()
+                    .setTitle(oldEmbed.title)
+                    .setColor(isSuccess ? 0x00FF00 : 0xFF0000)
+                    .setDescription(
+                        `**Исполнитель:** <@${contract.creatorId}>\n\n` +
+                        `<@${contract.creatorId}>, внесите сумму в казну и приложите скриншот, после нажмите кнопку **Оплатить**\n` +
+                        `**Проверяющий:** после оплаты ответьте на это сообщение командой \`!подтвердить\`\n` +
+                        `**Оплатить нужно в течении 72 часов**`
+                    );
+
+                participants.forEach(f => {
+                    const toPay = Math.round((parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier);
+                    db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)')
+                        .run(f.name, f.name, toPay);
+                    payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
+                });
+
+                await i.targetMessage.edit({
+                    content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                    components: [],
+                    embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                });
+
+                const payChannel = await client.channels.fetch(CONFIG.PAY);
+                if (payChannel) {
+                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${contract.creatorId}>`;
+                    await payChannel.send({
+                        content: `${rolePings}`,
+                        embeds: [payEmbed],
+                        components: [new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
+                        )]
+                    });
+                }
+
+                await i.reply({ content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'}**.`, flags: [MessageFlags.Ephemeral] });
+                return;
             }
             if (i.commandName === 'Напомнить о закрытии') {
                 const msgId = i.targetMessage.id;
@@ -445,7 +520,7 @@ client.on('interactionCreate', async i => {
             });
             embed.addFields(
                 { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
-                { name: 'ИНСТРУКЦИЯ', value: 'После таймера нажмите кнопку.', inline: false }
+                { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал" Если контракт уже заверишлся в игре.', inline: false }
             );
 
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
