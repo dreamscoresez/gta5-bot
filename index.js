@@ -196,26 +196,27 @@ client.on('interactionCreate', async i => {
             return i.reply({ content: '✅ Импортировано.', flags: [MessageFlags.Ephemeral] });
         }   
             if (i.commandName === 'Закрыть как успех' || i.commandName === 'Закрыть как провал') {
+                await i.deferReply({ flags: [MessageFlags.Ephemeral] }); // <-- ДОБАВЛЕНО
                 const isSuccess = i.commandName === 'Закрыть как успех';
                 const msgId = i.targetMessage.id;
                 const contract = db.prepare('SELECT creatorId, channelId FROM active_contracts WHERE msgId = ?').get(msgId);
                 if (!contract) {
-                    return i.reply({ content: '❌ Контракт не найден или уже закрыт.', flags: [MessageFlags.Ephemeral] });
+                    return i.editReply({ content: '❌ Контракт не найден или уже закрыт.' }); // i.reply → i.editReply
                 }
 
                 const oldEmbed = i.targetMessage.embeds[0];
                 if (!oldEmbed) {
-                    return i.reply({ content: '❌ Это не сообщение с контрактом.', flags: [MessageFlags.Ephemeral] });
+                    return i.editReply({ content: '❌ Это не сообщение с контрактом.' });
                 }
 
-                // Проверка времени (можно убрать, если хочешь принудительно)
+                // Проверка времени
                 const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
                 if (timeField) {
                     const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
                     if (timestampMatch) {
                         const endTime = parseInt(timestampMatch[1]) * 1000;
                         if (Date.now() < endTime) {
-                            return i.reply({ content: '❌ Рано! Таймер ещё не истёк.', flags: [MessageFlags.Ephemeral] });
+                            return i.editReply({ content: '❌ Рано! Таймер ещё не истёк.' });
                         }
                     }
                 }
@@ -223,7 +224,7 @@ client.on('interactionCreate', async i => {
                 // Удаляем запись из БД
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
 
-                // Удаляем сообщение "ВРЕМЯ ВЫШЛО", если есть
+                // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
                 try {
                     const recentMessages = await i.targetMessage.channel.messages.fetch({ limit: 20 });
                     const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
@@ -253,11 +254,20 @@ client.on('interactionCreate', async i => {
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
                 });
 
-                await i.targetMessage.edit({
-                    content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
-                    components: [],
-                    embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
-                });
+                // РЕДАКТИРОВАНИЕ С ОБРАБОТКОЙ ОШИБКИ (try/catch)
+                try {
+                    await i.targetMessage.edit({
+                        content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                        components: [],
+                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                    });
+                } catch (editErr) {
+                    console.warn('Не удалось отредактировать исходное сообщение (возможно, импортировано). Отправляем reply:', editErr);
+                    await i.targetMessage.reply({
+                        content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                    });
+                }
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
@@ -271,10 +281,12 @@ client.on('interactionCreate', async i => {
                     });
                 }
 
-                await i.reply({ content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'}**.`, flags: [MessageFlags.Ephemeral] });
+                await i.editReply({ content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'}**.` }); // i.reply → i.editReply
                 return;
             }
             if (i.commandName === 'Напомнить о закрытии') {
+                await i.deferReply({ flags: [MessageFlags.Ephemeral] }); // <-- ДОБАВЛЕНО
+
                 const targetMsg = i.targetMessage;
 
                 // 1. Получаем название контракта из embed
@@ -292,13 +304,13 @@ client.on('interactionCreate', async i => {
                     if (contractFromDb) creatorId = contractFromDb.creatorId;
                 }
                 if (!creatorId) {
-                    return i.reply({ content: '❌ Не удалось определить создателя контракта.', flags: [MessageFlags.Ephemeral] });
+                    return i.editReply({ content: '❌ Не удалось определить создателя контракта.' }); // изменено
                 }
 
                 // 3. Проверяем, активен ли контракт в БД
                 const contract = db.prepare('SELECT channelId FROM active_contracts WHERE msgId = ?').get(targetMsg.id);
                 if (!contract) {
-                    return i.reply({ content: '❌ Контракт не найден или уже закрыт.', flags: [MessageFlags.Ephemeral] });
+                    return i.editReply({ content: '❌ Контракт не найден или уже закрыт.' }); // изменено
                 }
 
                 // 4. Отправляем ответ (reply) на исходное сообщение
@@ -307,10 +319,10 @@ client.on('interactionCreate', async i => {
                         `⚠️ **НАПОМИНАНИЕ!** Контракт **«${contractName}»** (ID: ${targetMsg.id}) уже должен быть закрыт. ` +
                         `<@${creatorId}>, проверьте и закройте контракт!`
                     );
-                    await i.reply({ content: '✅ Напоминание отправлено.', flags: [MessageFlags.Ephemeral] });
+                    await i.editReply({ content: '✅ Напоминание отправлено.' }); // изменено
                 } catch (err) {
                     console.error('Ошибка отправки напоминания:', err);
-                    await i.reply({ content: '❌ Не удалось отправить напоминание.', flags: [MessageFlags.Ephemeral] });
+                    await i.editReply({ content: '❌ Не удалось отправить напоминание.' }); // изменено
                 }
                 return;
             }
@@ -493,11 +505,20 @@ client.on('interactionCreate', async i => {
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
                 });
 
-                await i.message.edit({
-                    content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
-                    components: [],
-                    embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
-                });
+                try {
+                    await i.targetMessage.edit({
+                        content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                        components: [],
+                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                    });
+                } catch (editErr) {
+                    // Если сообщение не от бота – редактировать нельзя
+                    console.warn('Не удалось отредактировать исходное сообщение (возможно, оно не от бота). Отправляем ответ:', editErr);
+                    await i.targetMessage.reply({
+                        content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                    });
+                }
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
