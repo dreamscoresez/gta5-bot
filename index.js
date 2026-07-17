@@ -45,6 +45,8 @@ const commands = [
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
     { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
+    { name: 'Принудительно оплатить', type: ApplicationCommandType.Message },
+    { name: 'Импортировать оплату', type: ApplicationCommandType.Message },
     new SlashCommandBuilder()
         .setName('удалить_контракт')
         .setDescription('Принудительно удалить контракт из БД (без редактирования сообщения)')
@@ -494,6 +496,117 @@ client.on('interactionCreate', async i => {
                     console.error('Ошибка отправки напоминания:', err);
                     await i.editReply({ content: '❌ Не удалось отправить напоминание.' });
                 }
+                return;
+            }
+
+            // ---- НОВЫЕ КОМАНДЫ ----
+            if (i.commandName === 'Принудительно оплатить') {
+                await i.deferReply({ flags: [MessageFlags.Ephemeral] });
+                const targetMsg = i.targetMessage;
+
+                // Проверяем, что это сообщение с платежом
+                if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
+                    return i.editReply({ content: '❌ Это не сообщение с платежом. Должен быть embed со списком долгов.' });
+                }
+
+                const embed = targetMsg.embeds[0];
+                const contractTitle = embed?.title || 'Неизвестный контракт';
+
+                console.log(`[LOG] Принудительная оплата от ${i.user.tag} для контракта "${contractTitle}"`);
+
+                let totalPaid = 0;
+                embed.fields.forEach(field => {
+                    const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
+                    if (amount > 0) {
+                        db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, field.name);
+                        const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
+                        console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
+                        totalPaid += amount;
+                    }
+                });
+
+                db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
+                if (totalPaid > 0) db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(totalPaid);
+                console.log(`[LOG] Принудительно оплачено: ${totalPaid.toLocaleString()} $`);
+
+                // Удаляем запись из pending_payments, если есть
+                const paymentMsgId = targetMsg.id;
+                const deleted = db.prepare('DELETE FROM pending_payments WHERE paymentMsgId = ?').run(paymentMsgId);
+                if (deleted.changes > 0) {
+                    console.log(`[DB] Удалена запись из pending_payments для сообщения ${paymentMsgId}`);
+                }
+
+                // Редактируем сообщение (убираем кнопку, отмечаем оплату)
+                try {
+                    await targetMsg.edit({ content: `✅ **Оплата подтверждена принудительно! Проверяющий: <@${i.user.id}>**`, components: [] });
+                } catch (editErr) {
+                    console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем новое:', editErr);
+                    try {
+                        await targetMsg.delete();
+                    } catch (deleteErr) {
+                        console.warn('Не удалось удалить исходное сообщение:', deleteErr);
+                    }
+                    await i.channel.send(`✅ **Оплата подтверждена принудительно! Проверяющий: <@${i.user.id}>**`);
+                }
+
+                await i.editReply({ content: `✅ Оплата по контракту "${contractTitle}" проведена принудительно. Сумма: ${totalPaid.toLocaleString()} $` });
+                return;
+            }
+
+            if (i.commandName === 'Импортировать оплату') {
+                await i.deferReply({ flags: [MessageFlags.Ephemeral] });
+                const targetMsg = i.targetMessage;
+
+                // Проверяем, что это сообщение с платежом
+                if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
+                    return i.editReply({ content: '❌ Это не сообщение с платежом. Должен быть embed со списком долгов.' });
+                }
+
+                const embed = targetMsg.embeds[0];
+                const contractTitle = embed?.title || 'Неизвестный контракт';
+
+                // Пытаемся извлечь creatorId из упоминания в сообщении
+                const mentionMatch = targetMsg.content.match(/<@!?(\d+)>/);
+                let creatorId = mentionMatch ? mentionMatch[1] : null;
+                if (!creatorId) {
+                    // Если не удалось – ищем в БД по msgId (может быть, контракт уже закрыт)
+                    const contractFromDb = db.prepare('SELECT creatorId FROM active_contracts WHERE msgId = ?').get(targetMsg.id);
+                    if (contractFromDb) creatorId = contractFromDb.creatorId;
+                }
+                if (!creatorId) {
+                    return i.editReply({ content: '❌ Не удалось определить создателя контракта.' });
+                }
+
+                // Проверяем, есть ли уже запись в pending_payments для этого сообщения
+                const existing = db.prepare('SELECT 1 FROM pending_payments WHERE paymentMsgId = ?').get(targetMsg.id);
+                if (existing) {
+                    return i.editReply({ content: '⚠️ Запись об оплате уже существует в БД.' });
+                }
+
+                // Считаем общую сумму
+                let totalAmount = 0;
+                embed.fields.forEach(field => {
+                    const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
+                    totalAmount += amount;
+                });
+
+                // Добавляем в pending_payments
+                db.prepare(`
+                    INSERT INTO pending_payments 
+                    (contractMsgId, paymentMsgId, creatorId, title, totalAmount, createdAt, deadline)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    targetMsg.id, // contractMsgId – используем ID сообщения с платежом как contractMsgId, если нет отдельного
+                    targetMsg.id, // paymentMsgId – тот же ID
+                    creatorId,
+                    contractTitle,
+                    totalAmount,
+                    Date.now(),
+                    Date.now() + 72 * 60 * 60 * 1000
+                );
+
+                console.log(`[DB] Импортирована оплата для контракта "${contractTitle}" (paymentMsgId: ${targetMsg.id})`);
+                await i.editReply({ content: `✅ Запись об оплате для контракта "${contractTitle}" добавлена в ожидающие.` });
                 return;
             }
         }
