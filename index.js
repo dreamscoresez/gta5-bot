@@ -41,8 +41,7 @@ const commands = [
     new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота'),
     new SlashCommandBuilder().setName('контракт_список').setDescription('Список активных контрактов'),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
-    { name: 'Закрыть как успех', type: ApplicationCommandType.Message },
-    { name: 'Закрыть как провал', type: ApplicationCommandType.Message },   
+    { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
         new SlashCommandBuilder()
         .setName('удалить_контракт')
@@ -195,100 +194,100 @@ client.on('interactionCreate', async i => {
                 .run(targetMsg.id, creatorId, Date.now() + 86400000, targetMsg.channelId);
             return i.reply({ content: '✅ Импортировано.', flags: [MessageFlags.Ephemeral] });
         }   
-            if (i.commandName === 'Закрыть как успех' || i.commandName === 'Закрыть как провал') {
-                await i.deferReply({ flags: [MessageFlags.Ephemeral] }); // <-- ДОБАВЛЕНО
-                const isSuccess = i.commandName === 'Закрыть как успех';
-                const msgId = i.targetMessage.id;
-                const contract = db.prepare('SELECT creatorId, channelId FROM active_contracts WHERE msgId = ?').get(msgId);
-                if (!contract) {
-                    return i.editReply({ content: '❌ Контракт не найден или уже закрыт.' }); // i.reply → i.editReply
-                }
-
-                const oldEmbed = i.targetMessage.embeds[0];
-                if (!oldEmbed) {
-                    return i.editReply({ content: '❌ Это не сообщение с контрактом.' });
-                }
-
-                // Проверка времени
-                const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
-                if (timeField) {
-                    const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
-                    if (timestampMatch) {
-                        const endTime = parseInt(timestampMatch[1]) * 1000;
-                        if (Date.now() < endTime) {
-                            return i.editReply({ content: '❌ Рано! Таймер ещё не истёк.' });
-                        }
-                    }
-                }
-
-                // Удаляем запись из БД
-                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
-
-                // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
-                try {
-                    const recentMessages = await i.targetMessage.channel.messages.fetch({ limit: 20 });
-                    const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
-                    if (timerMsg) await timerMsg.delete();
-                } catch (err) { /* игнорируем */ }
-
-                const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
-                const multiplier = isSuccess ? (participants.length >= 2 ? 0.2 : 0.4) : (participants.length >= 2 ? 0.3 : 0.5);
-
-                console.log(`[LOG] Контракт "${oldEmbed.title}" принудительно закрыт как ${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'} пользователем ${i.user.tag}`);
-                participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
-
-                const payEmbed = new EmbedBuilder()
-                    .setTitle(oldEmbed.title)
-                    .setColor(isSuccess ? 0x00FF00 : 0xFF0000)
-                    .setDescription(
-                        `**Исполнитель:** <@${contract.creatorId}>\n\n` +
-                        `<@${contract.creatorId}>, внесите сумму в казну и приложите скриншот, после нажмите кнопку **Оплатить**\n` +
-                        `**Проверяющий:** после оплаты ответьте на это сообщение командой \`!подтвердить\`\n` +
-                        `**Оплатить нужно в течении 72 часов**`
-                    );
-
-                participants.forEach(f => {
-                    const toPay = Math.round((parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier);
-                    db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)')
-                        .run(f.name, f.name, toPay);
-                    payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
-                });
-
-                // РЕДАКТИРОВАНИЕ С ОБРАБОТКОЙ ОШИБКИ (try/catch)
-                try {
-                    await i.targetMessage.edit({
-                        content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
-                        components: [],
-                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
-                    });
-                } catch (editErr) {
-                    console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем новое:', editErr);
-                    try {
-                        await i.targetMessage.delete();
-                    } catch (deleteErr) {
-                        console.warn('Не удалось удалить исходное сообщение:', deleteErr);
-                    }
-                    await i.channel.send({
-                        content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
-                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
-                    });
-                }
-
-                const payChannel = await client.channels.fetch(CONFIG.PAY);
-                if (payChannel) {
-                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${contract.creatorId}>`;
-                    await payChannel.send({
-                        content: `${rolePings}`,
-                        embeds: [payEmbed],
-                        components: [new ActionRowBuilder().addComponents(
-                            new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
-                        )]
-                    });
-                }
-
-                await i.editReply({ content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'}**.` }); // i.reply → i.editReply
-                return;
+        if (i.commandName === 'Закрыть контракт') {
+            await i.deferReply({ flags: [MessageFlags.Ephemeral] });
+            const isSuccess = true; // всегда успех
+            const msgId = i.targetMessage.id;
+            const contract = db.prepare('SELECT creatorId, channelId FROM active_contracts WHERE msgId = ?').get(msgId);
+            if (!contract) {
+                return i.editReply({ content: '❌ Контракт не найден или уже закрыт.' });
             }
+
+            const oldEmbed = i.targetMessage.embeds[0];
+            if (!oldEmbed) {
+                return i.editReply({ content: '❌ Это не сообщение с контрактом.' });
+            }
+
+            // Проверка времени
+            const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
+            if (timeField) {
+                const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
+                if (timestampMatch) {
+                    const endTime = parseInt(timestampMatch[1]) * 1000;
+                    if (Date.now() < endTime) {
+                        return i.editReply({ content: '❌ Рано! Таймер ещё не истёк.' });
+                    }
+                }
+            }
+
+            // Удаляем запись из БД
+            db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
+
+            // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
+            try {
+                const recentMessages = await i.targetMessage.channel.messages.fetch({ limit: 20 });
+                const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
+                if (timerMsg) await timerMsg.delete();
+            } catch (err) { /* игнорируем */ }
+
+            const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
+            const multiplier = participants.length >= 2 ? 0.2 : 0.4; // только успех
+
+            console.log(`[LOG] Контракт "${oldEmbed.title}" закрыт как УСПЕХ пользователем ${i.user.tag}`);
+            participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
+
+            const payEmbed = new EmbedBuilder()
+                .setTitle(oldEmbed.title)
+                .setColor(0x00FF00)
+                .setDescription(
+                    `**Исполнитель:** <@${contract.creatorId}>\n\n` +
+                    `<@${contract.creatorId}>, внесите сумму в казну и приложите скриншот, после нажмите кнопку **Оплатить**\n` +
+                    `**Проверяющий:** после оплаты ответьте на это сообщение командой \`!подтвердить\`\n` +
+                    `**Оплатить нужно в течении 72 часов**`
+                );
+
+            participants.forEach(f => {
+                const toPay = Math.round((parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier);
+                db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)')
+                    .run(f.name, f.name, toPay);
+                payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
+            });
+
+            // РЕДАКТИРОВАНИЕ С ОБРАБОТКОЙ ОШИБКИ (try/catch) – удаляем или отправляем новое
+            try {
+                await i.targetMessage.edit({
+                    content: `✅ Статус: **УСПЕХ ✅**`,
+                    components: [],
+                    embeds: [EmbedBuilder.from(oldEmbed).setColor(0x00FF00)]
+                });
+            } catch (editErr) {
+                console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем новое:', editErr);
+                try {
+                    await i.targetMessage.delete();
+                } catch (deleteErr) {
+                    console.warn('Не удалось удалить исходное сообщение:', deleteErr);
+                }
+                await i.channel.send({
+                    content: `✅ Статус: **УСПЕХ ✅**`,
+                    embeds: [EmbedBuilder.from(oldEmbed).setColor(0x00FF00)]
+                });
+            }
+
+            const payChannel = await client.channels.fetch(CONFIG.PAY);
+            if (payChannel) {
+                const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${contract.creatorId}>`;
+                await payChannel.send({
+                    content: `${rolePings}`,
+                    embeds: [payEmbed],
+                    components: [new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
+                    )]
+                });
+            }
+
+            await i.editReply({ content: '✅ Контракт закрыт как УСПЕХ.' });
+            return;
+        }
             if (i.commandName === 'Напомнить о закрытии') {
                 await i.deferReply({ flags: [MessageFlags.Ephemeral] }); // <-- ДОБАВЛЕНО
 
@@ -448,13 +447,13 @@ client.on('interactionCreate', async i => {
                 return i.showModal(modal);
             }
 
-            if (i.customId === 'succ' || i.customId === 'fail') {
+            if (i.customId === 'close') {
                 const contract = db.prepare('SELECT creatorId FROM active_contracts WHERE msgId = ?').get(i.message.id);
                 if (!contract) return i.reply({ content: '❌ Контракт не найден.', flags: [MessageFlags.Ephemeral] });
 
                 const isAdmin = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
                 if (i.user.id !== contract.creatorId && !isAdmin) {
-                    console.log(`[RESULT] ${i.customId} от ${i.user.tag}: ОТКАЗАНО.`);
+                    console.log(`[RESULT] close от ${i.user.tag}: ОТКАЗАНО.`);
                     return i.reply({ content: '❌ Только создатель или администратор может это сделать!', flags: [MessageFlags.Ephemeral] });
                 }
 
@@ -470,13 +469,10 @@ client.on('interactionCreate', async i => {
                 await i.deferUpdate();
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
 
-                // Удаляем сообщение "ВРЕМЯ ВЫШЛО" если оно есть
+                // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
                 try {
                     const recentMessages = await i.channel.messages.fetch({ limit: 20 });
-                    const timerMsg = recentMessages.find(m => 
-                        m.author.id === client.user.id && 
-                        m.content.includes('ВРЕМЯ ВЫШЛО')
-                    );
+                    const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
                     if (timerMsg) {
                         await timerMsg.delete();
                         console.log(`[DELETE] Удалено сообщение "ВРЕМЯ ВЫШЛО" msgId: ${timerMsg.id}`);
@@ -485,18 +481,16 @@ client.on('interactionCreate', async i => {
                     console.error('[ERROR] Не удалось удалить сообщение таймера:', err);
                 }
 
-                const isSuccess = i.customId === 'succ';
+                const isSuccess = true; // всегда успех
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
-                const multiplier = isSuccess ? (participants.length >= 2 ? 0.2 : 0.4) : (participants.length >= 2 ? 0.3 : 0.5);
+                const multiplier = participants.length >= 2 ? 0.2 : 0.4;
 
-                // ── Логирование кнопки succ/fail ─────────────────────
-                console.log(`[LOG] Контракт "${oldEmbed.title}" завершён как ${isSuccess ? 'УСПЕХ' : 'ПРОВАЛ'} пользователем ${i.user.tag}`);
-                console.log(`[LOG] Участники:`);
+                console.log(`[LOG] Контракт "${oldEmbed.title}" завершён как УСПЕХ пользователем ${i.user.tag}`);
                 participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
 
                 const payEmbed = new EmbedBuilder()
                     .setTitle(oldEmbed.title)
-                    .setColor(isSuccess ? 0x00FF00 : 0xFF0000)
+                    .setColor(0x00FF00)
                     .setDescription(
                         `**Исполнитель:** <@${contract.creatorId}>\n\n` +
                         `<@${contract.creatorId}>, внесите сумму в казну и приложите скриншот, после нажмите кнопку **Оплатить**\n` +
@@ -506,22 +500,27 @@ client.on('interactionCreate', async i => {
 
                 participants.forEach(f => {
                     const toPay = Math.round((parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier);
-                    db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)').run(f.name, f.name, toPay);
+                    db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)')
+                        .run(f.name, f.name, toPay);
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
                 });
 
                 try {
-                    await i.targetMessage.edit({
-                        content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                    await i.message.edit({
+                        content: '✅ Статус: **УСПЕХ ✅**',
                         components: [],
-                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                        embeds: [EmbedBuilder.from(oldEmbed).setColor(0x00FF00)]
                     });
                 } catch (editErr) {
-                    // Если сообщение не от бота – редактировать нельзя
-                    console.warn('Не удалось отредактировать исходное сообщение (возможно, оно не от бота). Отправляем ответ:', editErr);
-                    await i.targetMessage.reply({
-                        content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
-                        embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
+                    console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем новое:', editErr);
+                    try {
+                        await i.message.delete();
+                    } catch (deleteErr) {
+                        console.warn('Не удалось удалить исходное сообщение:', deleteErr);
+                    }
+                    await i.channel.send({
+                        content: '✅ Статус: **УСПЕХ ✅**',
+                        embeds: [EmbedBuilder.from(oldEmbed).setColor(0x00FF00)]
                     });
                 }
 
@@ -537,7 +536,7 @@ client.on('interactionCreate', async i => {
                     });
                 }
 
-                console.log(`[RESULT] ${i.customId} от ${i.user.tag}: Обработано.`);
+                console.log(`[RESULT] close от ${i.user.tag}: Обработано.`);
             }
 
             if (i.customId === 'pay_confirm') {
@@ -578,7 +577,7 @@ client.on('interactionCreate', async i => {
             });
             embed.addFields(
                 { name: 'Конец', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: false },
-                { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите "Успех" или "Провал" Если контракт уже заверишлся в игре.', inline: false }
+                { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите кнопку "Закрыть контракт", если контракт уже заверишлся в игре.', inline: false }
             );
 
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
@@ -586,8 +585,7 @@ client.on('interactionCreate', async i => {
                 content: `Контракт взял: <@${i.user.id}>`,
                 embeds: [embed],
                 components: [new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('succ').setLabel('Успех').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('fail').setLabel('Провал').setStyle(ButtonStyle.Danger)
+                    new ButtonBuilder().setCustomId('close').setLabel('Закрыть контракт').setStyle(ButtonStyle.Primary),
                 )]
             });
 
