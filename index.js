@@ -180,11 +180,15 @@ client.on('interactionCreate', async i => {
             const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
             if (!hasRole) return i.reply({ content: '❌ Нет прав.', flags: [MessageFlags.Ephemeral] });
 
-            if (i.commandName === 'Импортировать контракт') {
-                db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)')
-                    .run(i.targetMessage.id, i.targetMessage.author.id, Date.now() + 86400000, i.targetMessage.channelId);
-                return i.reply({ content: '✅ Импортировано.', flags: [MessageFlags.Ephemeral] });
-            }
+        if (i.commandName === 'Импортировать контракт') {
+            const targetMsg = i.targetMessage;
+            const mentionMatch = targetMsg.content.match(/<@!?(\d+)>/);
+            let creatorId = mentionMatch ? mentionMatch[1] : targetMsg.author.id; // fallback на автора сообщения
+
+            db.prepare('INSERT OR REPLACE INTO active_contracts (msgId, creatorId, endTime, channelId) VALUES (?, ?, ?, ?)')
+                .run(targetMsg.id, creatorId, Date.now() + 86400000, targetMsg.channelId);
+            return i.reply({ content: '✅ Импортировано.', flags: [MessageFlags.Ephemeral] });
+        }   
             if (i.commandName === 'Закрыть как успех' || i.commandName === 'Закрыть как провал') {
                 const isSuccess = i.commandName === 'Закрыть как успех';
                 const msgId = i.targetMessage.id;
@@ -265,23 +269,45 @@ client.on('interactionCreate', async i => {
                 return;
             }
             if (i.commandName === 'Напомнить о закрытии') {
-                const msgId = i.targetMessage.id;
-                const contract = db.prepare('SELECT creatorId, channelId FROM active_contracts WHERE msgId = ?').get(msgId);
+                const targetMsg = i.targetMessage;
+
+                // 1. Получаем название контракта из embed
+                let contractName = 'Контракт';
+                if (targetMsg.embeds && targetMsg.embeds.length > 0 && targetMsg.embeds[0].title) {
+                    contractName = targetMsg.embeds[0].title;
+                }
+
+                // 2. Парсим создателя из упоминания в сообщении
+                const mentionMatch = targetMsg.content.match(/<@!?(\d+)>/);
+                let creatorId = mentionMatch ? mentionMatch[1] : null;
+                if (!creatorId) {
+                    // Fallback на БД (если вдруг упоминания нет)
+                    const contractFromDb = db.prepare('SELECT creatorId FROM active_contracts WHERE msgId = ?').get(targetMsg.id);
+                    if (contractFromDb) creatorId = contractFromDb.creatorId;
+                }
+                if (!creatorId) {
+                    return i.reply({ content: '❌ Не удалось определить создателя контракта.', flags: [MessageFlags.Ephemeral] });
+                }
+
+                // 3. Проверяем, активен ли контракт в БД
+                const contract = db.prepare('SELECT channelId FROM active_contracts WHERE msgId = ?').get(targetMsg.id);
                 if (!contract) {
                     return i.reply({ content: '❌ Контракт не найден или уже закрыт.', flags: [MessageFlags.Ephemeral] });
                 }
+
+                // 4. Отправляем ответ (reply) на исходное сообщение
                 try {
-                    const channel = await client.channels.fetch(contract.channelId);
-                    await channel.send(
-                        `⚠️ **НАПОМИНАНИЕ!** Контракт (ID: ${msgId}) уже должен быть закрыт. ` +
-                        `<@${contract.creatorId}>, проверьте и закройте контракт!`
+                    await targetMsg.reply(
+                        `⚠️ **НАПОМИНАНИЕ!** Контракт **«${contractName}»** (ID: ${targetMsg.id}) уже должен быть закрыт. ` +
+                        `<@${creatorId}>, проверьте и закройте контракт!`
                     );
                     await i.reply({ content: '✅ Напоминание отправлено.', flags: [MessageFlags.Ephemeral] });
                 } catch (err) {
                     console.error('Ошибка отправки напоминания:', err);
                     await i.reply({ content: '❌ Не удалось отправить напоминание.', flags: [MessageFlags.Ephemeral] });
                 }
-}
+                return;
+            }
         }
         if (i.isChatInputCommand()) {
             console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
