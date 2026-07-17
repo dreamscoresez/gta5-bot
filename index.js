@@ -168,13 +168,32 @@ client.on('messageCreate', async msg => {
             try {
                 await targetMsg.edit({ content: `✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`, components: [] });
             } catch (editErr) {
-                console.warn('Не удалось отредактировать исходное сообщение, удаляем:', editErr);
+                console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем подробное подтверждение:', editErr);
+
+                // Формируем подробное сообщение
+                const embed = targetMsg.embeds[0];
+                const contractTitle = embed?.title || 'Неизвестный контракт';
+                let details = `📋 **${contractTitle}**\n`;
+                if (embed && embed.fields && embed.fields.length > 0) {
+                    embed.fields.forEach(field => {
+                        // Извлекаем сумму из строки вида "3 000 $"
+                        const amountMatch = field.value.match(/([\d, ]+)\s*\$?/);
+                        const amount = amountMatch ? amountMatch[1].trim() : '0';
+                        details += `• **${field.name}**: ${amount} $\n`;
+                    });
+                } else {
+                    details += '*(данные о платеже отсутствуют)*\n';
+                }
+                details += `\n✅ **Оплата подтверждена!** Проверяющий: <@${msg.author.id}>`;
+
+                // Удаляем исходное сообщение
                 try {
                     await targetMsg.delete();
                 } catch (deleteErr) {
                     console.warn('Не удалось удалить исходное сообщение:', deleteErr);
                 }
-                await msg.channel.send(`✅ **Оплата подтверждена! Проверяющий: <@${msg.author.id}>**`);
+                // Отправляем новое подробное сообщение
+                await msg.channel.send(details);
             }
 
             // Удаляем сообщение ожидания (если оно есть)
