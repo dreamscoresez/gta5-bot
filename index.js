@@ -414,8 +414,10 @@ client.on('interactionCreate', async i => {
                         `**Оплатить нужно в течении 72 часов**`
                     );
 
+                let totalPayAmount = 0;
                 participants.forEach(f => {
                     const toPay = Math.round((parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier);
+                    totalPayAmount += toPay;
                     db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)')
                         .run(f.name, f.name, toPay);
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
@@ -452,10 +454,6 @@ client.on('interactionCreate', async i => {
                         )]
                     });
                     // Сохраняем в ожидающие оплаты
-                    const totalAmount = participants.reduce((sum, f) => {
-                        const amount = parseInt(f.value.replace(/\D/g, '')) || 0;
-                        return sum + amount;
-                    }, 0);
                     db.prepare(`
                         INSERT INTO pending_payments 
                         (contractMsgId, paymentMsgId, creatorId, title, totalAmount, createdAt, deadline)
@@ -465,7 +463,7 @@ client.on('interactionCreate', async i => {
                         payMsg.id,
                         contract.creatorId,
                         oldEmbed.title,
-                        totalAmount,
+                        totalPayAmount,
                         Date.now(),
                         Date.now() + 72 * 60 * 60 * 1000
                     );
@@ -893,8 +891,10 @@ client.on('interactionCreate', async i => {
                         `**Оплатить нужно в течении 72 часов**`
                     );
 
+                let totalPayAmount = 0;
                 participants.forEach(f => {
                     const toPay = Math.round((parseInt(f.value.replace(/\D/g, '')) || 0) * 1000 * multiplier);
+                    totalPayAmount += toPay;
                     db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, IFNULL((SELECT amount FROM debtors WHERE name = ?), 0) + ?)')
                         .run(f.name, f.name, toPay);
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
@@ -932,10 +932,6 @@ client.on('interactionCreate', async i => {
                         )]
                     });
                     // Сохраняем в ожидающие оплаты
-                    const totalAmount = participants.reduce((sum, f) => {
-                        const amount = parseInt(f.value.replace(/\D/g, '')) || 0;
-                        return sum + amount;
-                    }, 0);
                     db.prepare(`
                         INSERT INTO pending_payments 
                         (contractMsgId, paymentMsgId, creatorId, title, totalAmount, createdAt, deadline)
@@ -945,7 +941,7 @@ client.on('interactionCreate', async i => {
                         payMsg.id,
                         creatorId,
                         oldEmbed.title,
-                        totalAmount,
+                        totalPayAmount,
                         Date.now(),
                         Date.now() + 72 * 60 * 60 * 1000
                     );
