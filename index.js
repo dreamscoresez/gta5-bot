@@ -262,9 +262,14 @@ client.on('interactionCreate', async i => {
                         embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
                     });
                 } catch (editErr) {
-                    console.warn('Не удалось отредактировать исходное сообщение (возможно, импортировано). Отправляем reply:', editErr);
-                    await i.targetMessage.reply({
-                        content: `✅ Контракт закрыт как **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
+                    console.warn('Не удалось отредактировать исходное сообщение, удаляем и отправляем новое:', editErr);
+                    try {
+                        await i.targetMessage.delete();
+                    } catch (deleteErr) {
+                        console.warn('Не удалось удалить исходное сообщение:', deleteErr);
+                    }
+                    await i.channel.send({
+                        content: `✅ Статус: **${isSuccess ? 'УСПЕХ ✅' : 'ПРОВАЛ ❌'}**`,
                         embeds: [EmbedBuilder.from(oldEmbed).setColor(isSuccess ? 0x00FF00 : 0xFF0000)]
                     });
                 }
