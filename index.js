@@ -545,33 +545,62 @@ client.on('interactionCreate', async i => {
             }
 
             if (i.customId === 'close') {
-                const contract = db.prepare('SELECT creatorId FROM active_contracts WHERE msgId = ?').get(i.message.id);
-                if (!contract) return i.reply({ content: '❌ Контракт не найден.', flags: [MessageFlags.Ephemeral] });
+                const msgId = i.message.id;
+                const oldEmbed = i.message.embeds[0];
+                if (!oldEmbed) {
+                    return i.reply({ content: '❌ Это не сообщение с контрактом.', flags: [MessageFlags.Ephemeral] });
+                }
 
+                // Проверяем время окончания
+                const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
+                if (timeField) {
+                    const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
+                    if (timestampMatch) {
+                        const endTime = parseInt(timestampMatch[1]) * 1000;
+                        if (Date.now() < endTime) {
+                            return i.reply({ content: '❌ Рано! Таймер ещё не истёк.', flags: [MessageFlags.Ephemeral] });
+                        }
+                    }
+                }
+
+                // Пытаемся найти запись в active_contracts
+                let contract = db.prepare('SELECT creatorId FROM active_contracts WHERE msgId = ?').get(msgId);
+                let creatorId = contract?.creatorId;
+
+                // Если записи нет – пытаемся извлечь creatorId из упоминания в сообщении
+                if (!creatorId) {
+                    const mentionMatch = i.message.content.match(/<@!?(\d+)>/);
+                    if (mentionMatch) {
+                        creatorId = mentionMatch[1];
+                    }
+                }
+
+                // Если всё равно не удалось – используем того, кто нажал кнопку (но лучше отказать)
+                if (!creatorId) {
+                    // Можно либо отказать, либо использовать i.user.id
+                    // return i.reply({ content: '❌ Не удалось определить создателя контракта.', flags: [MessageFlags.Ephemeral] });
+                    creatorId = i.user.id; // fallback, но лучше предупредить
+                }
+
+                // Проверяем права (создатель или админ)
                 const isAdmin = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-                if (i.user.id !== contract.creatorId && !isAdmin) {
+                if (i.user.id !== creatorId && !isAdmin) {
                     console.log(`[RESULT] close от ${i.user.tag}: ОТКАЗАНО.`);
                     return i.reply({ content: '❌ Только создатель или администратор может это сделать!', flags: [MessageFlags.Ephemeral] });
                 }
 
-                const oldEmbed = i.message.embeds[0];
-                const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
-                const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
-                const endTime = parseInt(timestampMatch[1]) * 1000;
+                // Удаляем запись из БД, если она была
+                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
 
-                if (Date.now() < endTime) {
-                    return i.reply({ content: '❌ Рано! Таймер ещё не истёк.', flags: [MessageFlags.Ephemeral] });
+                // Добавляем запись в историю (если ещё не добавлена)
+                const existingHistory = db.prepare('SELECT 1 FROM contract_history WHERE msgId = ?').get(msgId);
+                if (!existingHistory) {
+                    db.prepare('INSERT INTO contract_history (msgId, title, status, closedAt) VALUES (?, ?, ?, ?)')
+                        .run(msgId, oldEmbed.title, 'closed', Date.now());
+                    console.log(`[HISTORY] Контракт "${oldEmbed.title}" закрыт (msgId: ${msgId})`);
                 }
 
-                await i.deferUpdate();
-                db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(i.message.id);
-
-                // Добавляем запись в историю закрытых контрактов (для кнопки)
-                db.prepare('INSERT INTO contract_history (msgId, title, status, closedAt) VALUES (?, ?, ?, ?)')
-                    .run(i.message.id, oldEmbed.title, 'closed', Date.now());
-                console.log(`[HISTORY] Контракт "${oldEmbed.title}" закрыт (msgId: ${i.message.id})`);
-
-                // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
+                // Удаляем сообщение "ВРЕМЯ ВЫШЛО", если есть
                 try {
                     const recentMessages = await i.channel.messages.fetch({ limit: 20 });
                     const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
@@ -583,7 +612,7 @@ client.on('interactionCreate', async i => {
                     console.error('[ERROR] Не удалось удалить сообщение таймера:', err);
                 }
 
-                const isSuccess = true; // всегда успех
+                // Участники
                 const participants = oldEmbed.fields.filter(f => f.name !== 'Конец' && f.name !== 'ИНСТРУКЦИЯ');
                 const multiplier = participants.length >= 2 ? 0.2 : 0.4;
 
@@ -594,8 +623,8 @@ client.on('interactionCreate', async i => {
                     .setTitle(oldEmbed.title)
                     .setColor(0x00FF00)
                     .setDescription(
-                        `**Исполнитель:** <@${contract.creatorId}>\n\n` +
-                        `<@${contract.creatorId}>, внесите сумму в казну и приложите скриншот, после нажмите кнопку **Оплатить**\n` +
+                        `**Исполнитель:** <@${creatorId}>\n\n` +
+                        `<@${creatorId}>, внесите сумму в казну и приложите скриншот, после нажмите кнопку **Оплатить**\n` +
                         `**Проверяющий:** после оплаты ответьте на это сообщение командой \`!подтвердить\`\n` +
                         `**Оплатить нужно в течении 72 часов**`
                     );
@@ -607,6 +636,7 @@ client.on('interactionCreate', async i => {
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
                 });
 
+                // Редактируем исходное сообщение или удаляем и отправляем новое
                 try {
                     await i.message.edit({
                         content: '✅ Статус: **УСПЕХ ✅**',
@@ -626,9 +656,10 @@ client.on('interactionCreate', async i => {
                     });
                 }
 
+                // Отправляем платёжное сообщение в PAY канал
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${contract.creatorId}>`;
+                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${creatorId}>`;
                     await payChannel.send({
                         content: `${rolePings}`,
                         embeds: [payEmbed],
@@ -638,7 +669,7 @@ client.on('interactionCreate', async i => {
                     });
                 }
 
-                console.log(`[RESULT] close от ${i.user.tag}: Обработано.`);
+                await i.reply({ content: '✅ Контракт закрыт, платёж создан.', flags: [MessageFlags.Ephemeral] });
             }
 
             if (i.customId === 'pay_confirm') {
