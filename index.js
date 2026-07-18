@@ -28,10 +28,11 @@ function deductDebt(debtorName, amount) {
     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
 }
 
-// ---- Функция списания просрочки (только overdue) ----
+// ---- Функция списания просрочки (overdue + остаток в debtors) ----
 function deductOverdue(debtorName, amount) {
     if (amount <= 0 || !debtorName) return;
     
+    // 1. Сначала списываем из overdue
     const records = db.prepare('SELECT id, amount FROM overdue WHERE debtorName = ? AND resolved = 0 ORDER BY deadline ASC').all(debtorName);
     let remaining = amount;
     for (const rec of records) {
@@ -45,15 +46,19 @@ function deductOverdue(debtorName, amount) {
         }
         remaining -= deduct;
     }
+    
+    // 2. Оставшуюся сумму списываем из обычного долга (debtors)
     if (remaining > 0) {
-        console.log(`[LOG] Остаток ${remaining} $ по просрочке для ${debtorName} не списан (сумма больше долга)`);
+        console.log(`[LOG] Остаток ${remaining} $ по просрочке для ${debtorName} списывается из обычного долга`);
+        deductDebt(debtorName, remaining);
     }
 }
 
-// ---- Функция списания критической просрочки (только critical_overdue) ----
+// ---- Функция списания критической просрочки (critical_overdue + остаток в debtors) ----
 function deductCritical(debtorName, amount) {
     if (amount <= 0 || !debtorName) return;
     
+    // 1. Сначала списываем из critical_overdue
     const records = db.prepare('SELECT id, amount FROM critical_overdue WHERE debtorName = ? AND resolved = 0 ORDER BY deadline ASC').all(debtorName);
     let remaining = amount;
     for (const rec of records) {
@@ -67,8 +72,11 @@ function deductCritical(debtorName, amount) {
         }
         remaining -= deduct;
     }
+    
+    // 2. Оставшуюся сумму списываем из обычного долга (debtors)
     if (remaining > 0) {
-        console.log(`[LOG] Остаток ${remaining} $ по критической просрочке для ${debtorName} не списан (сумма больше долга)`);
+        console.log(`[LOG] Остаток ${remaining} $ по критической просрочке для ${debtorName} списывается из обычного долга`);
+        deductDebt(debtorName, remaining);
     }
 }
 
@@ -949,6 +957,7 @@ client.on('interactionCreate', async i => {
             if (i.commandName === 'ожидают') {
                 let text = `📋 **Ожидают оплаты**\n\n`;
 
+                // 1. Ожидающие оплаты из pending_payments (контракты)
                 const pending = db.prepare(`
                     SELECT title, creatorId, totalAmount, deadline, paymentMsgId
                     FROM pending_payments
@@ -961,30 +970,48 @@ client.on('interactionCreate', async i => {
                     text += '💳 Ожидающих оплаты: нет\n\n';
                 }
 
-                const overdueRecords = db.prepare(`SELECT debtorName, amount, deadline FROM overdue WHERE resolved = 0`).all();
-                if (overdueRecords.length > 0) {
-                    text += `⏰ **Просрочки (${overdueRecords.length}):**\n`;
-                    for (const rec of overdueRecords) {
-                        const timeLeft = Math.round((rec.deadline - Date.now()) / (1000 * 60 * 60));
-                        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
-                        text += `   • **${rec.debtorName}** — ${rec.amount.toLocaleString()} $ — ${status}\n`;
+                // 2. Собираем всех должников из всех таблиц
+                const allDebtors = new Map();
+                
+                // debtors
+                const debtors = db.prepare('SELECT name, amount FROM debtors WHERE amount > 0').all();
+                debtors.forEach(d => {
+                    if (!allDebtors.has(d.name)) {
+                        allDebtors.set(d.name, { debtors: 0, overdue: 0, critical: 0 });
                     }
-                    text += '\n';
-                } else {
-                    text += '⏰ Просрочек: нет\n\n';
-                }
+                    allDebtors.get(d.name).debtors = d.amount;
+                });
+                
+                // overdue
+                const overdueRecords = db.prepare('SELECT debtorName, amount FROM overdue WHERE resolved = 0').all();
+                overdueRecords.forEach(d => {
+                    if (!allDebtors.has(d.debtorName)) {
+                        allDebtors.set(d.debtorName, { debtors: 0, overdue: 0, critical: 0 });
+                    }
+                    allDebtors.get(d.debtorName).overdue += d.amount;
+                });
+                
+                // critical_overdue
+                const criticalRecords = db.prepare('SELECT debtorName, amount FROM critical_overdue WHERE resolved = 0').all();
+                criticalRecords.forEach(d => {
+                    if (!allDebtors.has(d.debtorName)) {
+                        allDebtors.set(d.debtorName, { debtors: 0, overdue: 0, critical: 0 });
+                    }
+                    allDebtors.get(d.debtorName).critical += d.amount;
+                });
 
-                const criticalRecords = db.prepare(`SELECT debtorName, amount, deadline FROM critical_overdue WHERE resolved = 0`).all();
-                if (criticalRecords.length > 0) {
-                    text += `🔥 **Критические просрочки (${criticalRecords.length}):**\n`;
-                    for (const rec of criticalRecords) {
-                        const timeLeft = Math.round((rec.deadline - Date.now()) / (1000 * 60 * 60));
-                        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
-                        text += `   • **${rec.debtorName}** — ${rec.amount.toLocaleString()} $ — ${status}\n`;
+                if (allDebtors.size > 0) {
+                    text += `👥 **Все должники (${allDebtors.size} чел.):**\n`;
+                    for (const [name, debts] of allDebtors) {
+                        const total = debts.debtors + debts.overdue + debts.critical;
+                        let parts = [];
+                        if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
+                        if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
+                        if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
+                        text += `   • **${name}**: ${total.toLocaleString()} $ (${parts.join(', ')})\n`;
                     }
-                    text += '\n';
                 } else {
-                    text += '🔥 Критических просрочек: нет\n\n';
+                    text += '👥 Должников нет\n';
                 }
 
                 return i.reply({ content: text, flags: [MessageFlags.Ephemeral] });
