@@ -8,6 +8,38 @@ if (!process.env.TOKEN) {
 const { Client, GatewayIntentBits, ModalBuilder, ApplicationCommandType, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const db = require('./database');
 
+// [!] Импортируем список участников фракции
+const membersData = require('./members.js');
+
+// [!] Строим Map: игровой ник -> discordId (только те, у кого есть id)
+const membersMap = new Map();
+membersData.forEach(m => {
+    if (m.discordId) {
+        membersMap.set(m.gameName, m.discordId);
+    }
+});
+
+// [!] Функция для получения упоминаний по массиву ников
+function getMembersInfo(nicknames) {
+    const result = {
+        mentions: [],
+        displayNames: []
+    };
+    
+    nicknames.forEach(nick => {
+        const trimmed = nick.trim();
+        const id = membersMap.get(trimmed);
+        if (id) {
+            result.mentions.push(`<@${id}>`);
+            result.displayNames.push(trimmed);
+        } else {
+            result.displayNames.push(trimmed);
+        }
+    });
+    
+    return result;
+}
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 if (!global.pendingMessages) global.pendingMessages = new Map();
 
@@ -1309,9 +1341,20 @@ client.on('interactionCreate', async i => {
                 { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите кнопку "Закрыть контракт", если контракт уже завершился в игре.', inline: false }
             );
 
+            // [!] Формируем упоминания для исполнителей
+            const membersInfo = getMembersInfo(nicknames);
+            const executorMentions = membersInfo.mentions.join(' ');
+
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
+            
+            // [!] Формируем сообщение: пикающий + исполнители с пингами
+            let content = `Контракт взял: <@${i.user.id}>`;
+            if (executorMentions) {
+                content += ` | Исполнители: ${executorMentions}`;
+            }
+
             const msg = await processChannel.send({
-                content: `Контракт взял: <@${i.user.id}>`,
+                content: content,
                 embeds: [embed],
                 components: [new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('close').setLabel('Закрыть контракт').setStyle(ButtonStyle.Primary)
@@ -1363,9 +1406,20 @@ client.on('interactionCreate', async i => {
                 { name: 'ИНСТРУКЦИЯ', value: 'После окончания таймера нажмите кнопку "Закрыть контракт", если контракт уже завершился в игре.', inline: false }
             );
 
+            // [!] Формируем упоминания для исполнителей
+            const membersInfo = getMembersInfo(nicknames);
+            const executorMentions = membersInfo.mentions.join(' ');
+
             const processChannel = await client.channels.fetch(CONFIG.PROCESS);
+            
+            // [!] Формируем сообщение: пикающий (админ указал userId) + исполнители с пингами
+            let content = `Контракт взял: <@${userId}>`;
+            if (executorMentions) {
+                content += ` | Исполнители: ${executorMentions}`;
+            }
+
             const msg = await processChannel.send({
-                content: `Контракт взял: <@${userId}>`,
+                content: content,
                 embeds: [embed],
                 components: [new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('close').setLabel('Закрыть контракт').setStyle(ButtonStyle.Primary)
