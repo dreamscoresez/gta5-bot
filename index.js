@@ -586,6 +586,11 @@ client.on('interactionCreate', async i => {
                 console.log(`[LOG] Контракт "${oldEmbed.title}" закрыт как УСПЕХ пользователем ${i.user.tag}`);
                 participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
 
+                // [!] Формируем пинги для исполнителей
+                const participantNames = participants.map(f => f.name);
+                const membersInfo = getMembersInfo(participantNames);
+                const executorMentions = membersInfo.mentions.join(' ');
+
                 const payEmbed = new EmbedBuilder()
                     .setTitle(oldEmbed.title)
                     .setColor(0x00FF00)
@@ -626,9 +631,15 @@ client.on('interactionCreate', async i => {
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${contract.creatorId}>`;
+                    // [!] Пингуем allowed_roles + исполнителя + исполнителей
+                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
+                    let pingContent = rolePings + ` <@${contract.creatorId}>`;
+                    if (executorMentions) {
+                        pingContent += ` ${executorMentions}`;
+                    }
+
                     const payMsg = await payChannel.send({
-                        content: `${rolePings}`,
+                        content: pingContent,
                         embeds: [payEmbed],
                         components: [new ActionRowBuilder().addComponents(
                             new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
@@ -1171,6 +1182,11 @@ client.on('interactionCreate', async i => {
                 console.log(`[LOG] Контракт "${oldEmbed.title}" завершён как УСПЕХ пользователем ${i.user.tag}`);
                 participants.forEach(f => console.log(`   -> ${f.name}: ${f.value}`));
 
+                // [!] Формируем пинги для исполнителей
+                const participantNames = participants.map(f => f.name);
+                const membersInfo = getMembersInfo(participantNames);
+                const executorMentions = membersInfo.mentions.join(' ');
+
                 const payEmbed = new EmbedBuilder()
                     .setTitle(oldEmbed.title)
                     .setColor(0x00FF00)
@@ -1211,9 +1227,15 @@ client.on('interactionCreate', async i => {
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ') + ` <@${creatorId}>`;
+                    // [!] Пингуем allowed_roles + исполнителя + исполнителей
+                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
+                    let pingContent = rolePings + ` <@${creatorId}>`;
+                    if (executorMentions) {
+                        pingContent += ` ${executorMentions}`;
+                    }
+
                     const payMsg = await payChannel.send({
-                        content: `${rolePings}`,
+                        content: pingContent,
                         embeds: [payEmbed],
                         components: [new ActionRowBuilder().addComponents(
                             new ButtonBuilder().setCustomId('pay_confirm').setLabel('Оплатить').setStyle(ButtonStyle.Success)
