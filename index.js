@@ -168,16 +168,16 @@ client.once('clientReady', async () => {
         console.error('[DB] Ошибка при создании critical_overdue:', err);
     }
 
-    // ---- Миграция: исправление старой суммы для "Мраморный Пилон" ----
-    try {
-        const oldRecord = db.prepare('SELECT id, totalAmount FROM pending_payments WHERE title = ? AND paid = 0').get('Мраморный Пилон');
-        if (oldRecord && oldRecord.totalAmount === 101) {
-            db.prepare('UPDATE pending_payments SET totalAmount = 20200 WHERE id = ?').run(oldRecord.id);
-            console.log('[DB] Исправлена сумма для контракта "Мраморный Пилон" с 101 на 20200');
-        }
-    } catch (err) {
-        console.error('[DB] Ошибка при миграции pending_payments:', err);
-    }
+//    // ---- Миграция: исправление старой суммы для "Мраморный Пилон" ----
+//    try {
+//        const oldRecord = db.prepare('SELECT id, totalAmount FROM pending_payments WHERE title = ? AND paid = 0').get('Мраморный Пилон');
+//        if (oldRecord && oldRecord.totalAmount === 101) {
+//            db.prepare('UPDATE pending_payments SET totalAmount = 20200 WHERE id = ?').run(oldRecord.id);
+//            console.log('[DB] Исправлена сумма для контракта "Мраморный Пилон" с 101 на 20200');
+//        }
+//    } catch (err) {
+//        console.error('[DB] Ошибка при миграции pending_payments:', err);
+//    }
 
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
