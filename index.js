@@ -21,6 +21,36 @@ const CONFIG = {
     ALLOWED_ROLES: process.env.ALLOWED_ROLES ? process.env.ALLOWED_ROLES.split(',') : []
 };
 
+// ---- Вспомогательная функция для получения деталей ожидающих оплат ----
+async function getPendingDetails(pendingRecords) {
+    if (pendingRecords.length === 0) return '';
+    const payChannel = await client.channels.fetch(CONFIG.PAY);
+    let result = '';
+    for (const p of pendingRecords) {
+        result += `💳 **${p.title}**\n`;
+        try {
+            const msg = await payChannel.messages.fetch(p.paymentMsgId);
+            if (msg.embeds && msg.embeds.length > 0 && msg.embeds[0].fields) {
+                const fields = msg.embeds[0].fields;
+                for (const field of fields) {
+                    const amountMatch = field.value.match(/([\d, ]+)\s*\$?/);
+                    const amount = amountMatch ? amountMatch[1].trim() : '0';
+                    result += `   • **${field.name}**: ${amount} $\n`;
+                }
+                const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
+                const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
+                result += `   ${status}\n`;
+            } else {
+                result += `   (данные о платеже недоступны, общая сумма: ${p.totalAmount.toLocaleString()} $)\n`;
+            }
+        } catch (e) {
+            result += `   (сообщение с платежом не найдено, общая сумма: ${p.totalAmount.toLocaleString()} $)\n`;
+        }
+        result += '\n';
+    }
+    return result;
+}
+
 const setupTimer = async (channel, creatorId, endTime) => {
     const remaining = endTime - Date.now();
     setTimeout(async () => {
@@ -42,6 +72,16 @@ const commands = [
     new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота'),
     new SlashCommandBuilder().setName('контракт_список').setDescription('Список активных контрактов'),
     new SlashCommandBuilder().setName('ожидают').setDescription('Показать контракты, ожидающие оплаты'),
+    new SlashCommandBuilder()
+        .setName('просрочка')
+        .setDescription('Начислить штраф за просрочку (сумма × 1.25) + дедлайн 48ч')
+        .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
+        .addIntegerOption(o => o.setName('сумма').setDescription('Сумма долга').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('критическая')
+        .setDescription('Начислить штраф за критическую просрочку (сумма × 1.25) + дедлайн 48ч')
+        .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
+        .addIntegerOption(o => o.setName('сумма').setDescription('Сумма долга').setRequired(true)),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
     { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
@@ -94,6 +134,51 @@ client.once('clientReady', async () => {
         console.error('[DB] Ошибка при создании pending_payments:', err);
     }
 
+    // ---- Создание таблицы overdue, если её нет ----
+    try {
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS overdue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                debtorName TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                deadline INTEGER NOT NULL,
+                createdAt INTEGER NOT NULL,
+                resolved INTEGER DEFAULT 0
+            )
+        `).run();
+        console.log('[DB] Таблица overdue проверена/создана');
+    } catch (err) {
+        console.error('[DB] Ошибка при создании overdue:', err);
+    }
+
+    // ---- Создание таблицы critical_overdue, если её нет ----
+    try {
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS critical_overdue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                debtorName TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                deadline INTEGER NOT NULL,
+                createdAt INTEGER NOT NULL,
+                resolved INTEGER DEFAULT 0
+            )
+        `).run();
+        console.log('[DB] Таблица critical_overdue проверена/создана');
+    } catch (err) {
+        console.error('[DB] Ошибка при создании critical_overdue:', err);
+    }
+
+    // ---- Миграция: исправление старой суммы для "Мраморный Пилон" ----
+    try {
+        const oldRecord = db.prepare('SELECT id, totalAmount FROM pending_payments WHERE title = ? AND paid = 0').get('Мраморный Пилон');
+        if (oldRecord && oldRecord.totalAmount === 101) {
+            db.prepare('UPDATE pending_payments SET totalAmount = 20200 WHERE id = ?').run(oldRecord.id);
+            console.log('[DB] Исправлена сумма для контракта "Мраморный Пилон" с 101 на 20200');
+        }
+    } catch (err) {
+        console.error('[DB] Ошибка при миграции pending_payments:', err);
+    }
+
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
@@ -131,11 +216,8 @@ client.once('clientReady', async () => {
     const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId FROM pending_payments WHERE paid = 0').all();
     if (pendingPayments.length > 0) {
         logMsg += `💳 Ожидают оплаты (${pendingPayments.length}):\n`;
-        for (const p of pendingPayments) {
-            const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
-            const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ ПРОСРОЧЕН!';
-            logMsg += `   • **${p.title}** — ${p.totalAmount.toLocaleString()} $ — <@${p.creatorId}> — ${status}\n`;
-        }
+        const details = await getPendingDetails(pendingPayments);
+        logMsg += details;
     } else {
         logMsg += `💳 Ожидающих оплаты: нет\n`;
     }
@@ -639,6 +721,12 @@ client.on('interactionCreate', async i => {
         if (i.isChatInputCommand()) {
             console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
 
+            // Проверка прав для всех команд, кроме 'ожидают'
+            if (i.commandName !== 'ожидают') {
+                const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+                if (!hasRole) return i.reply({ content: '❌ Нет прав.', flags: [MessageFlags.Ephemeral] });
+            }
+
             if (i.commandName === 'контракт_список') {
                 const activeContracts = db.prepare('SELECT msgId, channelId FROM active_contracts').all();
                 if (activeContracts.length === 0) {
@@ -667,9 +755,6 @@ client.on('interactionCreate', async i => {
                 const text = debtors.length ? debtors.map(d => `• **${d.name}**: ${d.amount.toLocaleString()}$`).join('\n') : 'Должников нет.';
                 return i.reply({ content: `📋 **Список должников:**\n${text}`, flags: [MessageFlags.Ephemeral] });
             }
-
-            const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-            if (!hasRole) return i.reply({ content: '❌ Нет прав.', flags: [MessageFlags.Ephemeral] });
 
             if (i.commandName === 'вызвать') {
                 if (i.channelId !== CONFIG.PICK) return i.reply({ content: '❌ Только в канале пика!', flags: [MessageFlags.Ephemeral] });
@@ -757,11 +842,8 @@ client.on('interactionCreate', async i => {
                 const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId FROM pending_payments WHERE paid = 0').all();
                 if (pendingPayments.length > 0) {
                     logMsg += `💳 Ожидают оплаты (${pendingPayments.length}):\n`;
-                    for (const p of pendingPayments) {
-                        const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
-                        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ ПРОСРОЧЕН!';
-                        logMsg += `   • **${p.title}** — ${p.totalAmount.toLocaleString()} $ — <@${p.creatorId}> — ${status}\n`;
-                    }
+                    const details = await getPendingDetails(pendingPayments);
+                    logMsg += details;
                 } else {
                     logMsg += `💳 Ожидающих оплаты: нет\n`;
                 }
@@ -772,6 +854,7 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: '✅ Статистика выведена в логи.', flags: [MessageFlags.Ephemeral] });
             }
 
+            // ---- Команда /ожидают (доступна всем) ----
             if (i.commandName === 'ожидают') {
                 const pending = db.prepare(`
                     SELECT title, creatorId, totalAmount, deadline, paymentMsgId
@@ -784,12 +867,56 @@ client.on('interactionCreate', async i => {
                 }
 
                 let text = `📋 **Ожидают оплаты (${pending.length}):**\n\n`;
-                for (const p of pending) {
-                    const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
-                    const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
-                    text += `• **${p.title}** — ${p.totalAmount.toLocaleString()} $ — <@${p.creatorId}> — ${status}\n`;
-                }
+                const details = await getPendingDetails(pending);
+                text += details;
                 return i.reply({ content: text, flags: [MessageFlags.Ephemeral] });
+            }
+
+            // ---- КОМАНДЫ ДЛЯ ПРОСРОЧЕК ----
+            if (i.commandName === 'просрочка') {
+                const nick = i.options.getString('ник');
+                const amount = i.options.getInteger('сумма');
+                const newAmount = Math.round(amount * 1.25);
+                // Добавляем к существующему долгу или создаём нового должника
+                const existing = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(nick);
+                if (existing) {
+                    const total = existing.amount + newAmount;
+                    db.prepare('UPDATE debtors SET amount = ? WHERE name = ?').run(total, nick);
+                } else {
+                    db.prepare('INSERT INTO debtors (name, amount) VALUES (?, ?)').run(nick, newAmount);
+                }
+                // Добавляем запись в overdue
+                const deadline = Date.now() + 48 * 60 * 60 * 1000;
+                db.prepare(`
+                    INSERT INTO overdue (debtorName, amount, deadline, createdAt)
+                    VALUES (?, ?, ?, ?)
+                `).run(nick, newAmount, deadline, Date.now());
+                console.log(`[LOG] /просрочка: ${nick} +${newAmount} $ (дедлайн ${new Date(deadline).toLocaleString()})`);
+                await i.reply({ content: `✅ Штраф за просрочку для **${nick}** начислен: +${newAmount.toLocaleString()} $ (сумма × 1.25). Дедлайн оплаты – 48 часов.`, flags: [MessageFlags.Ephemeral] });
+                return;
+            }
+
+            if (i.commandName === 'критическая') {
+                const nick = i.options.getString('ник');
+                const amount = i.options.getInteger('сумма');
+                const newAmount = Math.round(amount * 1.25);
+                // Добавляем к существующему долгу или создаём нового должника
+                const existing = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(nick);
+                if (existing) {
+                    const total = existing.amount + newAmount;
+                    db.prepare('UPDATE debtors SET amount = ? WHERE name = ?').run(total, nick);
+                } else {
+                    db.prepare('INSERT INTO debtors (name, amount) VALUES (?, ?)').run(nick, newAmount);
+                }
+                // Добавляем запись в critical_overdue
+                const deadline = Date.now() + 48 * 60 * 60 * 1000;
+                db.prepare(`
+                    INSERT INTO critical_overdue (debtorName, amount, deadline, createdAt)
+                    VALUES (?, ?, ?, ?)
+                `).run(nick, newAmount, deadline, Date.now());
+                console.log(`[LOG] /критическая: ${nick} +${newAmount} $ (дедлайн ${new Date(deadline).toLocaleString()})`);
+                await i.reply({ content: `✅ Критическая просрочка для **${nick}** зафиксирована: +${newAmount.toLocaleString()} $ (сумма × 1.25). Дедлайн оплаты – 48 часов.`, flags: [MessageFlags.Ephemeral] });
+                return;
             }
         }
 
