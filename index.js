@@ -21,18 +21,20 @@ const CONFIG = {
     ALLOWED_ROLES: process.env.ALLOWED_ROLES ? process.env.ALLOWED_ROLES.split(',') : []
 };
 
-// ---- Функция списания долга (обновляет debtors, overdue, critical_overdue) ----
+// ---- Функция списания обычного долга (только debtors) ----
 function deductDebt(debtorName, amount) {
     if (amount <= 0 || !debtorName) return;
-
-    // 1. Основная таблица должников
     db.prepare('UPDATE debtors SET amount = amount - ? WHERE name = ?').run(amount, debtorName);
     db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
+}
 
-    // 2. Просрочки (overdue)
+// ---- Функция списания просрочки (только overdue) ----
+function deductOverdue(debtorName, amount) {
+    if (amount <= 0 || !debtorName) return;
+    
+    const records = db.prepare('SELECT id, amount FROM overdue WHERE debtorName = ? AND resolved = 0 ORDER BY deadline ASC').all(debtorName);
     let remaining = amount;
-    const overdueRecords = db.prepare('SELECT id, amount FROM overdue WHERE debtorName = ? AND resolved = 0 ORDER BY deadline ASC').all(debtorName);
-    for (const rec of overdueRecords) {
+    for (const rec of records) {
         if (remaining <= 0) break;
         const deduct = Math.min(rec.amount, remaining);
         const newAmount = rec.amount - deduct;
@@ -43,11 +45,18 @@ function deductDebt(debtorName, amount) {
         }
         remaining -= deduct;
     }
+    if (remaining > 0) {
+        console.log(`[LOG] Остаток ${remaining} $ по просрочке для ${debtorName} не списан (сумма больше долга)`);
+    }
+}
 
-    // 3. Критические просрочки (critical_overdue)
-    remaining = amount;
-    const criticalRecords = db.prepare('SELECT id, amount FROM critical_overdue WHERE debtorName = ? AND resolved = 0 ORDER BY deadline ASC').all(debtorName);
-    for (const rec of criticalRecords) {
+// ---- Функция списания критической просрочки (только critical_overdue) ----
+function deductCritical(debtorName, amount) {
+    if (amount <= 0 || !debtorName) return;
+    
+    const records = db.prepare('SELECT id, amount FROM critical_overdue WHERE debtorName = ? AND resolved = 0 ORDER BY deadline ASC').all(debtorName);
+    let remaining = amount;
+    for (const rec of records) {
         if (remaining <= 0) break;
         const deduct = Math.min(rec.amount, remaining);
         const newAmount = rec.amount - deduct;
@@ -57,6 +66,9 @@ function deductDebt(debtorName, amount) {
             db.prepare('UPDATE critical_overdue SET amount = ? WHERE id = ?').run(newAmount, rec.id);
         }
         remaining -= deduct;
+    }
+    if (remaining > 0) {
+        console.log(`[LOG] Остаток ${remaining} $ по критической просрочке для ${debtorName} не списан (сумма больше долга)`);
     }
 }
 
@@ -119,7 +131,9 @@ const commands = [
     new SlashCommandBuilder().setName('вычесть').setDescription('Списать из казны').addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
     new SlashCommandBuilder().setName('должники').setDescription('Список должников'),
     new SlashCommandBuilder().setName('долг_добавить').setDescription('Добавить должника').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
-    new SlashCommandBuilder().setName('оплачено').setDescription('Закрыть долг').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
+    new SlashCommandBuilder().setName('оплачено').setDescription('Закрыть обычный долг').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
+    new SlashCommandBuilder().setName('оплачено_просрочка').setDescription('Закрыть долг из просрочки').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
+    new SlashCommandBuilder().setName('оплачено_крит').setDescription('Закрыть долг из критической просрочки').addStringOption(o => o.setName('ник').setDescription('Ник').setRequired(true)).addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
     new SlashCommandBuilder().setName('чек_контракты').setDescription('Принудительно проверить все таймеры'),
     new SlashCommandBuilder().setName('статистика').setDescription('Показать актуальную статистику бота'),
     new SlashCommandBuilder().setName('контракт_список').setDescription('Список активных контрактов'),
@@ -390,7 +404,7 @@ client.on('messageCreate', async msg => {
             targetMsg.embeds[0].fields.forEach(field => {
                 const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
                 if (amount > 0) {
-                    deductDebt(field.name, amount); // ИСПРАВЛЕНО
+                    deductDebt(field.name, amount);
                     const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
                     console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
                     totalPaid += amount;
@@ -420,7 +434,6 @@ client.on('messageCreate', async msg => {
                 let details = `📋 **${contractTitle}**\n`;
                 if (embed && embed.fields && embed.fields.length > 0) {
                     embed.fields.forEach(field => {
-                        // Извлекаем сумму из строки вида "3 000 $"
                         const amountMatch = field.value.match(/([\d, ]+)\s*\$?/);
                         const amount = amountMatch ? amountMatch[1].trim() : '0';
                         details += `• **${field.name}**: ${amount} $\n`;
@@ -430,13 +443,11 @@ client.on('messageCreate', async msg => {
                 }
                 details += `\n✅ **Оплата подтверждена!** Проверяющий: <@${msg.author.id}>`;
 
-                // Удаляем исходное сообщение
                 try {
                     await targetMsg.delete();
                 } catch (deleteErr) {
                     console.warn('Не удалось удалить исходное сообщение:', deleteErr);
                 }
-                // Отправляем новое подробное сообщение
                 await msg.channel.send(details);
             }
 
@@ -506,7 +517,6 @@ client.on('interactionCreate', async i => {
                     return i.editReply({ content: '❌ Это не сообщение с контрактом.' });
                 }
 
-                // Проверка времени
                 const timeField = oldEmbed.fields.find(f => f.name === 'Конец');
                 if (timeField) {
                     const timestampMatch = timeField.value.match(/<t:(\d+):R>/);
@@ -518,15 +528,12 @@ client.on('interactionCreate', async i => {
                     }
                 }
 
-                // Удаляем запись из БД
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
 
-                // Добавляем запись в историю
                 db.prepare('INSERT INTO contract_history (msgId, title, status, closedAt) VALUES (?, ?, ?, ?)')
                     .run(msgId, oldEmbed.title, 'closed', Date.now());
                 console.log(`[HISTORY] Контракт "${oldEmbed.title}" закрыт (msgId: ${msgId})`);
 
-                // Удаляем сообщение "ВРЕМЯ ВЫШЛО"
                 try {
                     const recentMessages = await i.targetMessage.channel.messages.fetch({ limit: 20 });
                     const timerMsg = recentMessages.find(m => m.author.id === client.user.id && m.content.includes('ВРЕМЯ ВЫШЛО'));
@@ -558,7 +565,6 @@ client.on('interactionCreate', async i => {
                     payEmbed.addFields({ name: f.name, value: `${toPay.toLocaleString()} $` });
                 });
 
-                // Редактируем исходное сообщение
                 try {
                     await i.targetMessage.edit({
                         content: `✅ Статус: **УСПЕХ ✅**`,
@@ -658,17 +664,26 @@ client.on('interactionCreate', async i => {
 
                 console.log(`[LOG] Принудительная оплата от ${i.user.tag} для контракта "${contractTitle}"`);
 
+                // Формируем список участников и сумм ДО списания
+                const participants = [];
                 let totalPaid = 0;
-                const paidDetails = [];
                 embed.fields.forEach(field => {
                     const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
                     if (amount > 0) {
-                        deductDebt(field.name, amount); // ИСПРАВЛЕНО
-                        const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(field.name);
-                        console.log(`   -> ${field.name}: ${amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
+                        participants.push({ name: field.name, amount: amount });
                         totalPaid += amount;
-                        paidDetails.push({ name: field.name, amount: amount });
                     }
+                });
+
+                if (participants.length === 0) {
+                    return i.editReply({ content: '❌ Нет сумм для оплаты.' });
+                }
+
+                // Списываем только из debtors (как !подтвердить)
+                participants.forEach(p => {
+                    deductDebt(p.name, p.amount);
+                    const debtor = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(p.name);
+                    console.log(`   -> ${p.name}: ${p.amount.toLocaleString()} $ (Остаток: ${debtor ? debtor.amount.toLocaleString() : 0} $)`);
                 });
 
                 db.prepare('DELETE FROM debtors WHERE amount <= 0').run();
@@ -677,16 +692,26 @@ client.on('interactionCreate', async i => {
 
                 // Удаляем запись из pending_payments
                 db.prepare('DELETE FROM pending_payments WHERE paymentMsgId = ?').run(targetMsg.id);
-
-                // Формируем подробное сообщение
-                let details = `📋 **${contractTitle}**\n`;
-                if (paidDetails.length > 0) {
-                    paidDetails.forEach(p => {
-                        details += `• **${p.name}**: ${p.amount.toLocaleString()} $\n`;
-                    });
-                } else {
-                    details += '*(данные о платеже отсутствуют)*\n';
+                // Удаляем сообщение ожидания, если есть
+                const pendingMsgId = global.pendingMessages?.get(targetMsg.id);
+                if (pendingMsgId) {
+                    try {
+                        const pendingMsg = await i.channel.messages.fetch(pendingMsgId);
+                        if (pendingMsg) {
+                            await pendingMsg.delete();
+                            console.log(`[DELETE] Удалено сообщение ожидания ${pendingMsgId}`);
+                        }
+                    } catch (err) {
+                        console.warn('Не удалось найти/удалить сообщение ожидания:', err);
+                    }
+                    global.pendingMessages.delete(targetMsg.id);
                 }
+
+                // Формируем подробное сообщение с информацией о контракте
+                let details = `📋 **${contractTitle}**\n`;
+                participants.forEach(p => {
+                    details += `• **${p.name}**: ${p.amount.toLocaleString()} $\n`;
+                });
                 details += `\n✅ **Оплата подтверждена принудительно!** Проверяющий: <@${i.user.id}>`;
 
                 // Пытаемся отредактировать исходное сообщение
@@ -702,7 +727,7 @@ client.on('interactionCreate', async i => {
                     await i.channel.send(details);
                 }
 
-                await i.editReply({ content: `✅ Оплата по контракту "${contractTitle}" проведена принудительно. Сумма: ${totalPaid.toLocaleString()} $` });
+                await i.editReply({ content: `✅ Оплата по контракту **"${contractTitle}"** проведена принудительно. Сумма: ${totalPaid.toLocaleString()} $` });
                 return;
             }
 
@@ -762,7 +787,6 @@ client.on('interactionCreate', async i => {
         if (i.isChatInputCommand()) {
             console.log(`[LOG] /${i.commandName} от ${i.user.tag}`);
 
-            // Проверка прав для всех команд, кроме 'ожидают'
             if (i.commandName !== 'ожидают') {
                 const hasRole = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
                 if (!hasRole) return i.reply({ content: '❌ Нет прав.', flags: [MessageFlags.Ephemeral] });
@@ -827,38 +851,49 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: `✅ Проверено: ${activeContracts.length}`, flags: [MessageFlags.Ephemeral] });
             }
 
-            if (i.commandName === 'пополнить') {
-                const amt = i.options.getInteger('сумма');
-                db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(amt);
-                console.log(`[LOG] /пополнить: +${amt} $ (казну пополнил ${i.user.tag})`);
-                return i.reply({ content: `✅ Пополнено на ${amt.toLocaleString()} $`, flags: [MessageFlags.Ephemeral] });
-            }
-
-            if (i.commandName === 'вычесть') {
-                const amt = i.options.getInteger('сумма');
-                const currentBalance = db.prepare('SELECT balance FROM treasury WHERE id = 1').get().balance || 0;
-                if (amt > currentBalance) {
-                    return i.reply({ content: `❌ Недостаточно средств. Доступно: ${currentBalance.toLocaleString()} $`, flags: [MessageFlags.Ephemeral] });
+            if (['пополнить', 'вычесть', 'долг_добавить', 'оплачено', 'оплачено_просрочка', 'оплачено_крит'].includes(i.commandName)) {
+                const amt = i.options.getInteger('сумма') || 0;
+                const nick = i.options.getString('ник') || '';
+                
+                if (i.commandName === 'пополнить') {
+                    db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(amt);
+                    console.log(`[LOG] /пополнить: +${amt} $ (казну пополнил ${i.user.tag})`);
+                    return i.reply({ content: `✅ Пополнено на ${amt.toLocaleString()} $`, flags: [MessageFlags.Ephemeral] });
                 }
-                db.prepare('UPDATE treasury SET balance = balance - ? WHERE id = 1').run(amt);
-                console.log(`[LOG] /вычесть: -${amt} $ (списал ${i.user.tag})`);
-                return i.reply({ content: `✅ Списано ${amt.toLocaleString()} $`, flags: [MessageFlags.Ephemeral] });
-            }
-
-            if (i.commandName === 'долг_добавить') {
-                const nick = i.options.getString('ник');
-                const amt = i.options.getInteger('сумма');
-                db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, ?)').run(nick, amt);
-                console.log(`[LOG] /долг_добавить: ${nick} +${amt} $ (добавил ${i.user.tag})`);
-                return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
-            }
-
-            if (i.commandName === 'оплачено') {
-                const nick = i.options.getString('ник');
-                const amt = i.options.getInteger('сумма');
-                deductDebt(nick, amt); // ИСПРАВЛЕНО
-                console.log(`[LOG] /оплачено: ${nick} -${amt} $ (закрыл ${i.user.tag})`);
-                return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
+                
+                if (i.commandName === 'вычесть') {
+                    const currentBalance = db.prepare('SELECT balance FROM treasury WHERE id = 1').get().balance || 0;
+                    if (amt > currentBalance) {
+                        return i.reply({ content: `❌ Недостаточно средств. Доступно: ${currentBalance.toLocaleString()} $`, flags: [MessageFlags.Ephemeral] });
+                    }
+                    db.prepare('UPDATE treasury SET balance = balance - ? WHERE id = 1').run(amt);
+                    console.log(`[LOG] /вычесть: -${amt} $ (списал ${i.user.tag})`);
+                    return i.reply({ content: `✅ Списано ${amt.toLocaleString()} $`, flags: [MessageFlags.Ephemeral] });
+                }
+                
+                if (i.commandName === 'долг_добавить') {
+                    db.prepare('INSERT OR REPLACE INTO debtors (name, amount) VALUES (?, ?)').run(nick, amt);
+                    console.log(`[LOG] /долг_добавить: ${nick} +${amt} $ (добавил ${i.user.tag})`);
+                    return i.reply({ content: '✅ Выполнено.', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                if (i.commandName === 'оплачено') {
+                    deductDebt(nick, amt);
+                    console.log(`[LOG] /оплачено: ${nick} -${amt} $ (закрыл ${i.user.tag})`);
+                    return i.reply({ content: '✅ Обычный долг оплачен.', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                if (i.commandName === 'оплачено_просрочка') {
+                    deductOverdue(nick, amt);
+                    console.log(`[LOG] /оплачено_просрочка: ${nick} -${amt} $ (закрыл ${i.user.tag})`);
+                    return i.reply({ content: '✅ Просрочка оплачена.', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                if (i.commandName === 'оплачено_крит') {
+                    deductCritical(nick, amt);
+                    console.log(`[LOG] /оплачено_крит: ${nick} -${amt} $ (закрыл ${i.user.tag})`);
+                    return i.reply({ content: '✅ Критическая просрочка оплачена.', flags: [MessageFlags.Ephemeral] });
+                }
             }
 
             if (i.commandName === 'статистика') {
