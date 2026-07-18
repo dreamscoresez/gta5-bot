@@ -51,6 +51,19 @@ async function getPendingDetails(pendingRecords) {
     return result;
 }
 
+// ---- Вспомогательная функция для форматирования просрочек ----
+function formatOverdue(tableName, label) {
+    const records = db.prepare(`SELECT debtorName, amount, deadline FROM ${tableName} WHERE resolved = 0`).all();
+    if (records.length === 0) return null;
+    let result = `${label} (${records.length}):\n`;
+    for (const rec of records) {
+        const timeLeft = Math.round((rec.deadline - Date.now()) / (1000 * 60 * 60));
+        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
+        result += `   • **${rec.debtorName}** — ${rec.amount.toLocaleString()} $ — ${status}\n`;
+    }
+    return result;
+}
+
 const setupTimer = async (channel, creatorId, endTime) => {
     const remaining = endTime - Date.now();
     setTimeout(async () => {
@@ -168,17 +181,6 @@ client.once('clientReady', async () => {
         console.error('[DB] Ошибка при создании critical_overdue:', err);
     }
 
-//    // ---- Миграция: исправление старой суммы для "Мраморный Пилон" ----
-//    try {
-//        const oldRecord = db.prepare('SELECT id, totalAmount FROM pending_payments WHERE title = ? AND paid = 0').get('Мраморный Пилон');
-//        if (oldRecord && oldRecord.totalAmount === 101) {
-//            db.prepare('UPDATE pending_payments SET totalAmount = 20200 WHERE id = ?').run(oldRecord.id);
-//            console.log('[DB] Исправлена сумма для контракта "Мраморный Пилон" с 101 на 20200');
-//        }
-//    } catch (err) {
-//        console.error('[DB] Ошибка при миграции pending_payments:', err);
-//    }
-
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
@@ -221,6 +223,14 @@ client.once('clientReady', async () => {
     } else {
         logMsg += `💳 Ожидающих оплаты: нет\n`;
     }
+
+    // ---- Просрочки ----
+    const overdueStr = formatOverdue('overdue', '⏰ Просрочки');
+    if (overdueStr) logMsg += overdueStr;
+
+    // ---- Критические просрочки ----
+    const criticalStr = formatOverdue('critical_overdue', '🔥 Критические просрочки');
+    if (criticalStr) logMsg += criticalStr;
 
     logMsg += `--------------------------`;
     console.log(logMsg);
@@ -848,6 +858,14 @@ client.on('interactionCreate', async i => {
                     logMsg += `💳 Ожидающих оплаты: нет\n`;
                 }
 
+                // ---- Просрочки ----
+                const overdueStr = formatOverdue('overdue', '⏰ Просрочки');
+                if (overdueStr) logMsg += overdueStr;
+
+                // ---- Критические просрочки ----
+                const criticalStr = formatOverdue('critical_overdue', '🔥 Критические просрочки');
+                if (criticalStr) logMsg += criticalStr;
+
                 logMsg += `--------------------------`;
 
                 console.log(logMsg);
@@ -856,19 +874,49 @@ client.on('interactionCreate', async i => {
 
             // ---- Команда /ожидают (доступна всем) ----
             if (i.commandName === 'ожидают') {
+                let text = `📋 **Ожидают оплаты**\n\n`;
+
+                // 1. Ожидающие оплаты (pending_payments)
                 const pending = db.prepare(`
                     SELECT title, creatorId, totalAmount, deadline, paymentMsgId
                     FROM pending_payments
                     WHERE paid = 0
                 `).all();
-
-                if (pending.length === 0) {
-                    return i.reply({ content: '📋 Контрактов, ожидающих оплаты, нет.', flags: [MessageFlags.Ephemeral] });
+                if (pending.length > 0) {
+                    const details = await getPendingDetails(pending);
+                    text += details;
+                } else {
+                    text += '💳 Ожидающих оплаты: нет\n\n';
                 }
 
-                let text = `📋 **Ожидают оплаты (${pending.length}):**\n\n`;
-                const details = await getPendingDetails(pending);
-                text += details;
+                // 2. Просрочки
+                const overdueRecords = db.prepare(`SELECT debtorName, amount, deadline FROM overdue WHERE resolved = 0`).all();
+                if (overdueRecords.length > 0) {
+                    text += `⏰ **Просрочки (${overdueRecords.length}):**\n`;
+                    for (const rec of overdueRecords) {
+                        const timeLeft = Math.round((rec.deadline - Date.now()) / (1000 * 60 * 60));
+                        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
+                        text += `   • **${rec.debtorName}** — ${rec.amount.toLocaleString()} $ — ${status}\n`;
+                    }
+                    text += '\n';
+                } else {
+                    text += '⏰ Просрочек: нет\n\n';
+                }
+
+                // 3. Критические просрочки
+                const criticalRecords = db.prepare(`SELECT debtorName, amount, deadline FROM critical_overdue WHERE resolved = 0`).all();
+                if (criticalRecords.length > 0) {
+                    text += `🔥 **Критические просрочки (${criticalRecords.length}):**\n`;
+                    for (const rec of criticalRecords) {
+                        const timeLeft = Math.round((rec.deadline - Date.now()) / (1000 * 60 * 60));
+                        const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
+                        text += `   • **${rec.debtorName}** — ${rec.amount.toLocaleString()} $ — ${status}\n`;
+                    }
+                    text += '\n';
+                } else {
+                    text += '🔥 Критических просрочек: нет\n\n';
+                }
+
                 return i.reply({ content: text, flags: [MessageFlags.Ephemeral] });
             }
 
