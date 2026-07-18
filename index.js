@@ -631,11 +631,11 @@ client.on('interactionCreate', async i => {
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    // [!] Пингуем allowed_roles + исполнителя + исполнителей
+                    // [!] Формируем пинги: роли | пикающий | исполнители
                     const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
-                    let pingContent = rolePings + ` <@${contract.creatorId}>`;
+                    let pingContent = rolePings + ` | <@${contract.creatorId}>`;
                     if (executorMentions) {
-                        pingContent += ` ${executorMentions}`;
+                        pingContent += ` | Исполнители: ${executorMentions}`;
                     }
 
                     const payMsg = await payChannel.send({
@@ -1227,11 +1227,11 @@ client.on('interactionCreate', async i => {
 
                 const payChannel = await client.channels.fetch(CONFIG.PAY);
                 if (payChannel) {
-                    // [!] Пингуем allowed_roles + исполнителя + исполнителей
+                    // [!] Формируем пинги: роли | пикающий | исполнители
                     const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
-                    let pingContent = rolePings + ` <@${creatorId}>`;
+                    let pingContent = rolePings + ` | <@${creatorId}>`;
                     if (executorMentions) {
-                        pingContent += ` ${executorMentions}`;
+                        pingContent += ` | Исполнители: ${executorMentions}`;
                     }
 
                     const payMsg = await payChannel.send({
