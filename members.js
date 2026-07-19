@@ -19,6 +19,7 @@ module.exports = [
     { discordId: '562921505219018793', gameName: 'Cursa Minoru', group: 'minoru' },
     { discordId: '300584617541500929', gameName: 'Payton Minoru', group: 'minoru' },
     { discordId: '1021825592716435547', gameName: 'Babaiko Minoru', group: 'minoru' },
+    { discordId: '1021825592716435547', gameName: 'Babaika Minoru', group: 'minoru' }, // НА СЛУЧАЙ ЕСЛИ ВДРУГ ЗАХОТЯТ НАПИСАТЬ ЧЕРЕЗ BabaikA Minoru а не BabaikO Minoru
     { discordId: '1189562546848538644', gameName: 'Fil Minoru', group: 'minoru' },
     { discordId: '967047971814395914', gameName: 'Amae Minoru', group: 'minoru' },
     { discordId: '1025759248606560268', gameName: 'Angel Minoru', group: 'minoru' },
@@ -30,7 +31,6 @@ module.exports = [
     { discordId: '1304132578009284711', gameName: 'Arhangel Blackout', group: 'academ' },
     { discordId: '1250549060188766340', gameName: 'Prize Minoru', group: 'academ' },
     { discordId: '1468962933160808491', gameName: 'Sam Minoru', group: 'academ' },
-    { discordId: '1526541573737676880', gameName: 'Fill Minoru', group: 'academ' },
     
     // ===== БЕЗ DISCORD ID (не пингуются) =====
     { discordId: null, gameName: 'Also Minoru', group: 'minoru' },
