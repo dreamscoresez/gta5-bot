@@ -497,16 +497,42 @@ client.on('messageCreate', async msg => {
     // ---- Обработка !подтвердить ----
     if (msg.channel.id === CONFIG.PAY && msg.content.trim() === '!подтвердить') {
         const hasRole = msg.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
-        if (!hasRole) return await msg.reply('❌ У вас нет прав проверяющего.');
-        if (!msg.reference || !msg.reference.messageId) return await msg.reply('❌ Ответьте на сообщение с контрактом.');
+        if (!hasRole) {
+            const reply = await msg.reply('❌ У вас нет прав проверяющего.');
+            setTimeout(async () => {
+                await msg.delete().catch(() => {});
+                await reply.delete().catch(() => {});
+            }, 5000);
+            return;
+        }
+        if (!msg.reference || !msg.reference.messageId) {
+            const reply = await msg.reply('❌ Ответьте на сообщение с контрактом.');
+            setTimeout(async () => {
+                await msg.delete().catch(() => {});
+                await reply.delete().catch(() => {});
+            }, 5000);
+            return;
+        }
 
         try {
             const targetMsg = await msg.channel.messages.fetch(msg.reference.messageId);
-            if (!targetMsg) return await msg.reply('❌ Сообщение не найдено.');
+            if (!targetMsg) {
+                const reply = await msg.reply('❌ Сообщение не найдено.');
+                setTimeout(async () => {
+                    await msg.delete().catch(() => {});
+                    await reply.delete().catch(() => {});
+                }, 5000);
+                return;
+            }
 
             // Проверяем, что это сообщение с платежом
             if (!targetMsg.embeds || targetMsg.embeds.length === 0 || !targetMsg.embeds[0].fields || targetMsg.embeds[0].fields.length === 0) {
-                return await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
+                const reply = await msg.reply('❌ Это не сообщение с платежом. Ответьте на сообщение, которое содержит список долгов.');
+                setTimeout(async () => {
+                    await msg.delete().catch(() => {});
+                    await reply.delete().catch(() => {});
+                }, 5000);
+                return;
             }
 
             console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
@@ -586,7 +612,11 @@ client.on('messageCreate', async msg => {
 
         } catch (err) {
             console.error(err);
-            await msg.reply('❌ Ошибка при поиске сообщения.');
+            const reply = await msg.reply('❌ Ошибка при поиске сообщения.');
+            setTimeout(async () => {
+                await msg.delete().catch(() => {});
+                await reply.delete().catch(() => {});
+            }, 5000);
         }
         return;
     }
