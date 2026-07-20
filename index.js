@@ -112,13 +112,50 @@ function deductCritical(debtorName, amount) {
     }
 }
 
+// ---- Функция для внесения оплаты вручную ----
+function addManualPayment(title, amount, participants, creatorId) {
+    const paymentId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    const deadline = Date.now() + 72 * 60 * 60 * 1000;
+    
+    db.prepare(`
+        INSERT INTO pending_payments 
+        (contractMsgId, paymentMsgId, creatorId, title, totalAmount, createdAt, deadline, paid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        `manual_${paymentId}`,
+        `manual_${paymentId}`,
+        creatorId,
+        title,
+        amount,
+        Date.now(),
+        deadline,
+        0
+    );
+    
+    // Добавляем участников в debtors
+    participants.split(';').forEach(name => {
+        const trimmed = name.trim();
+        if (trimmed) {
+            const existing = db.prepare('SELECT amount FROM debtors WHERE name = ?').get(trimmed);
+            if (existing) {
+                db.prepare('UPDATE debtors SET amount = amount + ? WHERE name = ?').run(amount, trimmed);
+            } else {
+                db.prepare('INSERT INTO debtors (name, amount) VALUES (?, ?)').run(trimmed, amount);
+            }
+        }
+    });
+    
+    return paymentId;
+}
+
 // ---- Вспомогательная функция для получения деталей ожидающих оплат ----
 async function getPendingDetails(pendingRecords) {
     if (pendingRecords.length === 0) return '';
     const payChannel = await client.channels.fetch(CONFIG.PAY);
     let result = '';
     for (const p of pendingRecords) {
-        result += `💳 **${p.title}**\n`;
+        const isManual = p.contractMsgId && p.contractMsgId.startsWith('manual_');
+        result += `💳 **${p.title}**${isManual ? ' (📝 ручная оплата)' : ''}\n`;
         try {
             const msg = await payChannel.messages.fetch(p.paymentMsgId);
             if (msg.embeds && msg.embeds.length > 0 && msg.embeds[0].fields) {
@@ -133,9 +170,15 @@ async function getPendingDetails(pendingRecords) {
                 result += `   ${status}\n`;
             } else {
                 result += `   (данные о платеже недоступны, общая сумма: ${p.totalAmount.toLocaleString()} $)\n`;
+                const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
+                const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
+                result += `   ${status}\n`;
             }
         } catch (e) {
             result += `   (сообщение с платежом не найдено, общая сумма: ${p.totalAmount.toLocaleString()} $)\n`;
+            const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
+            const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
+            result += `   ${status}\n`;
         }
         result += '\n';
     }
@@ -188,6 +231,12 @@ const commands = [
         .setDescription('Начислить штраф за критическую просрочку (сумма × 1.25) + дедлайн 48ч')
         .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
         .addIntegerOption(o => o.setName('сумма').setDescription('Сумма долга').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('внести_оплату')
+        .setDescription('Внести оплату по контракту (вручную)')
+        .addStringOption(o => o.setName('название').setDescription('Название контракта').setRequired(true))
+        .addIntegerOption(o => o.setName('сумма').setDescription('Сумма оплаты').setRequired(true))
+        .addStringOption(o => o.setName('участники').setDescription('Ники участников через ;').setRequired(true)),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
     { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
@@ -308,7 +357,7 @@ client.once('clientReady', async () => {
     }
 
     // ---- Ожидающие оплаты ----
-    const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId FROM pending_payments WHERE paid = 0').all();
+    const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId, contractMsgId FROM pending_payments WHERE paid = 0').all();
     if (pendingPayments.length > 0) {
         logMsg += `💳 Ожидают оплаты (${pendingPayments.length}):\n`;
         const details = await getPendingDetails(pendingPayments);
@@ -902,6 +951,65 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: `✅ Проверено: ${activeContracts.length}`, flags: [MessageFlags.Ephemeral] });
             }
 
+            if (i.commandName === 'внести_оплату') {
+                const title = i.options.getString('название');
+                const amount = i.options.getInteger('сумма');
+                const participants = i.options.getString('участники');
+                
+                // Проверяем, что сумма положительная
+                if (amount <= 0) {
+                    return i.reply({ content: '❌ Сумма должна быть больше 0.', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                // Проверяем участников
+                const names = participants.split(';').filter(n => n.trim());
+                if (names.length === 0) {
+                    return i.reply({ content: '❌ Укажите хотя бы одного участника.', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                // Создаём запись оплаты
+                const paymentId = addManualPayment(title, amount, participants, i.user.id);
+                
+                // Формируем embed для отображения в /ожидают
+                const embed = new EmbedBuilder()
+                    .setTitle(title)
+                    .setColor(0x00FF00)
+                    .setDescription(
+                        `**Исполнитель:** <@${i.user.id}>\n\n` +
+                        `💰 **Сумма:** ${amount.toLocaleString()} $\n` +
+                        `👥 **Участники:**\n${names.map(n => `   • ${n}`).join('\n')}\n\n` +
+                        `⏳ **Ожидает оплаты...**\n` +
+                        `📌 **Статус:** ⏳ Ожидание`
+                    )
+                    .setFooter({ text: `ID: ${paymentId} | Создано: ${new Date().toLocaleString()}` });
+                
+                // Отправляем сообщение в канал оплаты
+                const payChannel = await client.channels.fetch(CONFIG.PAY);
+                if (payChannel) {
+                    const rolePings = CONFIG.ALLOWED_ROLES.map(r => `<@&${r}>`).join(' ');
+                    const msg = await payChannel.send({
+                        content: `${rolePings} | <@${i.user.id}>`,
+                        embeds: [embed],
+                        components: [new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`manual_pay_${paymentId}`)
+                                .setLabel('✅ Оплачено')
+                                .setStyle(ButtonStyle.Success)
+                        )]
+                    });
+                    
+                    // Обновляем paymentMsgId в БД
+                    db.prepare('UPDATE pending_payments SET paymentMsgId = ? WHERE contractMsgId = ?')
+                        .run(msg.id, `manual_${paymentId}`);
+                }
+                
+                await i.reply({ 
+                    content: `✅ Оплата по контракту **"${title}"** на сумму ${amount.toLocaleString()} $ внесена!`,
+                    flags: [MessageFlags.Ephemeral] 
+                });
+                return;
+            }
+
             if (['пополнить', 'вычесть', 'долг_добавить', 'оплачено', 'оплачено_просрочка', 'оплачено_крит'].includes(i.commandName)) {
                 const amt = i.options.getInteger('сумма') || 0;
                 const nick = i.options.getString('ник') || '';
@@ -977,7 +1085,7 @@ client.on('interactionCreate', async i => {
                     logMsg += `   (нет активных контрактов)\n`;
                 }
 
-                const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId FROM pending_payments WHERE paid = 0').all();
+                const pendingPayments = db.prepare('SELECT title, creatorId, totalAmount, deadline, paymentMsgId, contractMsgId FROM pending_payments WHERE paid = 0').all();
                 if (pendingPayments.length > 0) {
                     logMsg += `💳 Ожидают оплаты (${pendingPayments.length}):\n`;
                     const details = await getPendingDetails(pendingPayments);
@@ -1002,7 +1110,7 @@ client.on('interactionCreate', async i => {
 
                 // 1. Ожидающие оплаты из pending_payments (контракты)
                 const pending = db.prepare(`
-                    SELECT title, creatorId, totalAmount, deadline, paymentMsgId
+                    SELECT title, creatorId, totalAmount, deadline, paymentMsgId, contractMsgId
                     FROM pending_payments
                     WHERE paid = 0
                 `).all();
@@ -1106,6 +1214,68 @@ client.on('interactionCreate', async i => {
         // --- 3. ОБРАБОТКА КНОПОК ---
         if (i.isButton()) {
             console.log(`[LOG] Кнопка: ${i.customId} от ${i.user.tag}`);
+
+            // [!] Обработка кнопки для ручной оплаты
+            if (i.customId.startsWith('manual_pay_')) {
+                const paymentId = i.customId.replace('manual_pay_', '');
+                const contractMsgId = `manual_${paymentId}`;
+                
+                // Проверяем, что оплата ещё не подтверждена
+                const payment = db.prepare('SELECT * FROM pending_payments WHERE contractMsgId = ? AND paid = 0').get(contractMsgId);
+                if (!payment) {
+                    return i.reply({ content: '❌ Оплата уже подтверждена или не найдена.', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                // Проверяем права (только создатель или админ)
+                const isAdmin = i.member.roles.cache.some(role => CONFIG.ALLOWED_ROLES.includes(role.id));
+                if (i.user.id !== payment.creatorId && !isAdmin) {
+                    return i.reply({ content: '❌ Только создатель или администратор может подтвердить оплату!', flags: [MessageFlags.Ephemeral] });
+                }
+                
+                // Отмечаем как оплачено
+                db.prepare('UPDATE pending_payments SET paid = 1 WHERE contractMsgId = ?').run(contractMsgId);
+                
+                // Находим участников из embed и списываем долги
+                const targetMsg = await i.channel.messages.fetch(i.message.id);
+                if (targetMsg && targetMsg.embeds && targetMsg.embeds[0]) {
+                    const embed = targetMsg.embeds[0];
+                    const description = embed.description || '';
+                    const participantsMatch = description.match(/👥 \*\*Участники:\*\*\n([\s\S]*?)(?=\n\n|$)/);
+                    if (participantsMatch) {
+                        const lines = participantsMatch[1].split('\n');
+                        lines.forEach(line => {
+                            const match = line.match(/• (.+)/);
+                            if (match) {
+                                const name = match[1].trim();
+                                // Списываем долг
+                                deductDebt(name, payment.totalAmount);
+                            }
+                        });
+                    }
+                }
+                
+                // Обновляем embed
+                const updatedEmbed = EmbedBuilder.from(i.message.embeds[0])
+                    .setColor(0xFFA500)
+                    .setDescription(
+                        i.message.embeds[0].description.replace('⏳ Ожидание', '✅ ОПЛАЧЕНО!')
+                    );
+                
+                await i.update({
+                    content: i.message.content,
+                    embeds: [updatedEmbed],
+                    components: []
+                });
+                
+                // Добавляем деньги в казну
+                db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(payment.totalAmount);
+                
+                await i.followUp({ 
+                    content: `✅ Оплата по контракту **"${payment.title}"** подтверждена! Сумма ${payment.totalAmount.toLocaleString()} $ добавлена в казну.`,
+                    flags: [MessageFlags.Ephemeral] 
+                });
+                return;
+            }
 
             if (i.customId === 'start') {
                 console.log(`[LOG] Открыта форма создания контракта от ${i.user.tag}`);
