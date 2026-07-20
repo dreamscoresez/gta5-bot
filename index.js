@@ -237,6 +237,12 @@ const commands = [
         .addStringOption(o => o.setName('название').setDescription('Название контракта').setRequired(true))
         .addIntegerOption(o => o.setName('сумма').setDescription('Сумма оплаты').setRequired(true))
         .addStringOption(o => o.setName('участники').setDescription('Ники участников через ;').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('отметить_оплачено')
+        .setDescription('Отметить долг как оплаченный (только для отображения в /ожидают)')
+        .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
+        .addStringOption(o => o.setName('контракт').setDescription('Название контракта').setRequired(true))
+        .addIntegerOption(o => o.setName('сумма').setDescription('Сумма долга').setRequired(true)),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
     { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
@@ -321,6 +327,23 @@ client.once('clientReady', async () => {
         console.log('[DB] Таблица critical_overdue проверена/создана');
     } catch (err) {
         console.error('[DB] Ошибка при создании critical_overdue:', err);
+    }
+
+    // ---- Создание таблицы paid_markers для отметок оплаты ----
+    try {
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS paid_markers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                debtorName TEXT NOT NULL,
+                contractTitle TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                markedBy TEXT NOT NULL,
+                createdAt INTEGER NOT NULL
+            )
+        `).run();
+        console.log('[DB] Таблица paid_markers проверена/создана');
+    } catch (err) {
+        console.error('[DB] Ошибка при создании paid_markers:', err);
     }
 
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -951,6 +974,7 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: `✅ Проверено: ${activeContracts.length}`, flags: [MessageFlags.Ephemeral] });
             }
 
+            // ---- Обработка команды /внести_оплату ----
             if (i.commandName === 'внести_оплату') {
                 const title = i.options.getString('название');
                 const amount = i.options.getInteger('сумма');
@@ -1005,6 +1029,38 @@ client.on('interactionCreate', async i => {
                 
                 await i.reply({ 
                     content: `✅ Оплата по контракту **"${title}"** на сумму ${amount.toLocaleString()} $ внесена!`,
+                    flags: [MessageFlags.Ephemeral] 
+                });
+                return;
+            }
+
+            // ---- Обработка команды /отметить_оплачено ----
+            if (i.commandName === 'отметить_оплачено') {
+                const nick = i.options.getString('ник');
+                const contractTitle = i.options.getString('контракт');
+                const amount = i.options.getInteger('сумма');
+                
+                // Проверяем, есть ли уже отметка для этого контракта и должника
+                const existing = db.prepare(`
+                    SELECT 1 FROM paid_markers 
+                    WHERE debtorName = ? AND contractTitle = ? AND amount = ?
+                `).get(nick, contractTitle, amount);
+                
+                if (existing) {
+                    return i.reply({ 
+                        content: `⚠️ Для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ уже есть отметка об оплате.`,
+                        flags: [MessageFlags.Ephemeral] 
+                    });
+                }
+                
+                // Добавляем отметку
+                db.prepare(`
+                    INSERT INTO paid_markers (debtorName, contractTitle, amount, markedBy, createdAt)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(nick, contractTitle, amount, i.user.id, Date.now());
+                
+                await i.reply({ 
+                    content: `✅ Отметка об оплате для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ добавлена!`,
                     flags: [MessageFlags.Ephemeral] 
                 });
                 return;
@@ -1105,6 +1161,7 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: '✅ Статистика выведена в логи.', flags: [MessageFlags.Ephemeral] });
             }
 
+            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают ----
             if (i.commandName === 'ожидают') {
                 let text = `📋 **Ожидают оплаты**\n\n`;
 
@@ -1128,16 +1185,21 @@ client.on('interactionCreate', async i => {
                 const debtors = db.prepare('SELECT name, amount FROM debtors WHERE amount > 0').all();
                 debtors.forEach(d => {
                     if (!allDebtors.has(d.name)) {
-                        allDebtors.set(d.name, { debtors: 0, overdue: 0, critical: 0 });
+                        allDebtors.set(d.name, { debtors: 0, overdue: 0, critical: 0, paidMarkers: [] });
                     }
                     allDebtors.get(d.name).debtors = d.amount;
                 });
+                
+                // [!] Получаем отметки об оплате
+                const paidMarkers = db.prepare(`
+                    SELECT debtorName, contractTitle, amount FROM paid_markers
+                `).all();
                 
                 // overdue
                 const overdueRecords = db.prepare('SELECT debtorName, amount FROM overdue WHERE resolved = 0').all();
                 overdueRecords.forEach(d => {
                     if (!allDebtors.has(d.debtorName)) {
-                        allDebtors.set(d.debtorName, { debtors: 0, overdue: 0, critical: 0 });
+                        allDebtors.set(d.debtorName, { debtors: 0, overdue: 0, critical: 0, paidMarkers: [] });
                     }
                     allDebtors.get(d.debtorName).overdue += d.amount;
                 });
@@ -1146,20 +1208,58 @@ client.on('interactionCreate', async i => {
                 const criticalRecords = db.prepare('SELECT debtorName, amount FROM critical_overdue WHERE resolved = 0').all();
                 criticalRecords.forEach(d => {
                     if (!allDebtors.has(d.debtorName)) {
-                        allDebtors.set(d.debtorName, { debtors: 0, overdue: 0, critical: 0 });
+                        allDebtors.set(d.debtorName, { debtors: 0, overdue: 0, critical: 0, paidMarkers: [] });
                     }
                     allDebtors.get(d.debtorName).critical += d.amount;
                 });
 
+                // [!] Добавляем отметки об оплате в Map
+                paidMarkers.forEach(m => {
+                    if (!allDebtors.has(m.debtorName)) {
+                        allDebtors.set(m.debtorName, { debtors: 0, overdue: 0, critical: 0, paidMarkers: [] });
+                    }
+                    allDebtors.get(m.debtorName).paidMarkers.push({
+                        contractTitle: m.contractTitle,
+                        amount: m.amount
+                    });
+                });
+
                 if (allDebtors.size > 0) {
-                    text += `👥 **Все должники (${allDebtors.size} чел.):**\n`;
-                    for (const [name, debts] of allDebtors) {
+                    // [!] Сортируем должников по алфавиту
+                    const sortedDebtors = Array.from(allDebtors.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                    
+                    text += `👥 **Все должники (${sortedDebtors.length} чел.):**\n`;
+                    for (const [name, debts] of sortedDebtors) {
                         const total = debts.debtors + debts.overdue + debts.critical;
-                        let parts = [];
-                        if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
-                        if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
-                        if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
-                        text += `   • **${name}**: ${total.toLocaleString()} $ (${parts.join(', ')})\n`;
+                        
+                        // [!] Проверяем, есть ли отметки об оплате для этого должника
+                        if (debts.paidMarkers.length > 0) {
+                            // Если есть отметки, показываем только те суммы, которые не отмечены как оплаченные
+                            let remainingDebt = total;
+                            let paidInfo = [];
+                            debts.paidMarkers.forEach(m => {
+                                remainingDebt -= m.amount;
+                                paidInfo.push(`${m.amount.toLocaleString()}$ (${m.contractTitle}) ✅`);
+                            });
+                            
+                            if (remainingDebt > 0) {
+                                let parts = [];
+                                if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
+                                if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
+                                if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
+                                text += `   • **${name}**: ${remainingDebt.toLocaleString()} $ (${parts.join(', ')}) — Оплачено: ${paidInfo.join(', ')}\n`;
+                            } else {
+                                // Если весь долг оплачен, показываем с пометкой
+                                text += `   • ~~**${name}**~~: ~~${total.toLocaleString()} $~~ ✅ **ВСЁ ОПЛАЧЕНО!** (${paidInfo.join(', ')})\n`;
+                            }
+                        } else {
+                            // Нет отметок об оплате - показываем как обычно
+                            let parts = [];
+                            if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
+                            if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
+                            if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
+                            text += `   • **${name}**: ${total.toLocaleString()} $ (${parts.join(', ')})\n`;
+                        }
                     }
                 } else {
                     text += '👥 Должников нет\n';
