@@ -148,33 +148,66 @@ function addManualPayment(title, amount, participants, creatorId) {
     return paymentId;
 }
 
-// ---- Вспомогательная функция для получения деталей ожидающих оплат ----
+// ---- Вспомогательная функция для получения деталей ожидающих оплат (ОБНОВЛЕНА) ----
 async function getPendingDetails(pendingRecords) {
     if (pendingRecords.length === 0) return '';
     const payChannel = await client.channels.fetch(CONFIG.PAY);
     let result = '';
     for (const p of pendingRecords) {
         const isManual = p.contractMsgId && p.contractMsgId.startsWith('manual_');
-        result += `💳 **${p.title}**${isManual ? ' (📝 ручная оплата)' : ''}\n`;
+        
         try {
             const msg = await payChannel.messages.fetch(p.paymentMsgId);
             if (msg.embeds && msg.embeds.length > 0 && msg.embeds[0].fields) {
                 const fields = msg.embeds[0].fields;
+                let allPaid = true;
+                let participantLines = [];
+                let hasAnyParticipants = false;
+                
                 for (const field of fields) {
                     const amountMatch = field.value.match(/([\d, ]+)\s*\$?/);
                     const amount = amountMatch ? amountMatch[1].trim() : '0';
-                    result += `   • **${field.name}**: ${amount} $\n`;
+                    const cleanAmount = parseInt(amount.replace(/\s/g, '')) || 0;
+                    
+                    // [!] Проверяем, есть ли отметка об оплате для этого участника в этом контракте
+                    const paidMarker = db.prepare(`
+                        SELECT 1 FROM paid_markers 
+                        WHERE debtorName = ? AND contractTitle = ? AND amount = ?
+                    `).get(field.name, p.title, cleanAmount);
+                    
+                    const isPaid = !!paidMarker;
+                    if (!isPaid) allPaid = false;
+                    hasAnyParticipants = true;
+                    
+                    // [!] Если оплачено - зачёркиваем
+                    if (isPaid) {
+                        participantLines.push(`   • ~~**${field.name}**: ${amount} $~~ ✅`);
+                    } else {
+                        participantLines.push(`   • **${field.name}**: ${amount} $`);
+                    }
                 }
+                
+                // [!] Если все оплатили - ПРОПУСКАЕМ этот контракт (не показываем)
+                if (allPaid && hasAnyParticipants) {
+                    continue;
+                }
+                
+                // Показываем контракт только если есть неоплаченные участники
+                result += `💳 **${p.title}**${isManual ? ' (📝 ручная оплата)' : ''}\n`;
+                result += participantLines.join('\n');
+                
                 const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
                 const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
-                result += `   ${status}\n`;
+                result += `\n   ${status}\n`;
             } else {
+                result += `💳 **${p.title}**${isManual ? ' (📝 ручная оплата)' : ''}\n`;
                 result += `   (данные о платеже недоступны, общая сумма: ${p.totalAmount.toLocaleString()} $)\n`;
                 const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
                 const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
                 result += `   ${status}\n`;
             }
         } catch (e) {
+            result += `💳 **${p.title}**${isManual ? ' (📝 ручная оплата)' : ''}\n`;
             result += `   (сообщение с платежом не найдено, общая сумма: ${p.totalAmount.toLocaleString()} $)\n`;
             const timeLeft = Math.round((p.deadline - Date.now()) / (1000 * 60 * 60));
             const status = timeLeft > 0 ? `⏳ осталось ${timeLeft} ч.` : '⌛ **ПРОСРОЧЕН!**';
@@ -1245,7 +1278,7 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: '✅ Статистика выведена в логи.', flags: [MessageFlags.Ephemeral] });
             }
 
-            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают ----
+            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают (с зачёркиванием при полной оплате) ----
             if (i.commandName === 'ожидают') {
                 let text = `📋 **Ожидают оплаты**\n\n`;
 
@@ -1329,23 +1362,29 @@ client.on('interactionCreate', async i => {
                             // [!] Пропускаем, если долг = 0
                             if (total === 0) continue;
                             
-                            // [!] Проверяем, есть ли отметки об оплате для этого должника
-                            if (debts.paidMarkers.length > 0) {
-                                // Если есть отметки, показываем только те суммы, которые не отмечены как оплаченные
-                                let remainingDebt = total;
-                                let paidInfo = [];
-                                debts.paidMarkers.forEach(m => {
-                                    remainingDebt -= m.amount;
-                                    paidInfo.push(`${m.amount.toLocaleString()}$ (${m.contractTitle}) ✅`);
-                                });
-                                
-                                if (remainingDebt > 0) {
-                                    let parts = [];
-                                    if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
-                                    if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
-                                    if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
-                                    text += `   • **${name}**: ${remainingDebt.toLocaleString()} $ (${parts.join(', ')}) — Оплачено: ${paidInfo.join(', ')}\n`;
-                                }
+                            // [!] Считаем сумму всех отметок об оплате
+                            let totalPaidMarkers = 0;
+                            let paidInfo = [];
+                            debts.paidMarkers.forEach(m => {
+                                totalPaidMarkers += m.amount;
+                                paidInfo.push(`${m.amount.toLocaleString()}$ (${m.contractTitle}) ✅`);
+                            });
+                            
+                            // [!] Если сумма отметок равна долгу - зачёркиваем полностью
+                            if (totalPaidMarkers > 0 && totalPaidMarkers >= total) {
+                                let parts = [];
+                                if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
+                                if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
+                                if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
+                                text += `   • ~~**${name}**: ${total.toLocaleString()} $ (${parts.join(', ')})~~ ✅ **ВСЁ ОПЛАЧЕНО!** (${paidInfo.join(', ')})\n`;
+                            } else if (totalPaidMarkers > 0 && totalPaidMarkers < total) {
+                                // Частично оплачено - ник зачёркнут, но остаток виден
+                                let parts = [];
+                                if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
+                                if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
+                                if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
+                                const remaining = total - totalPaidMarkers;
+                                text += `   • ~~**${name}**~~: ${remaining.toLocaleString()} $ (${parts.join(', ')}) — Оплачено: ${paidInfo.join(', ')}\n`;
                             } else {
                                 // Нет отметок об оплате - показываем как обычно
                                 let parts = [];
