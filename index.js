@@ -239,10 +239,16 @@ const commands = [
         .addStringOption(o => o.setName('участники').setDescription('Ники участников через ;').setRequired(true)),
     new SlashCommandBuilder()
         .setName('отметить_оплачено')
-        .setDescription('Отметить долг как оплаченный (списывает из debtors, НЕ добавляет в казну)')
+        .setDescription('Отметить долг как оплаченный (ТОЛЬКО отметка, НЕ списывает из debtors)')
         .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
         .addStringOption(o => o.setName('контракт').setDescription('Название контракта').setRequired(true))
         .addIntegerOption(o => o.setName('сумма').setDescription('Сумма долга').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('убрать_отметку')
+        .setDescription('Удалить отметку об оплате (на крайний случай)')
+        .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
+        .addStringOption(o => o.setName('контракт').setDescription('Название контракта').setRequired(true))
+        .addIntegerOption(o => o.setName('сумма').setDescription('Сумма').setRequired(true)),
     { name: 'Импортировать контракт', type: ApplicationCommandType.Message },
     { name: 'Закрыть контракт', type: ApplicationCommandType.Message },
     { name: 'Напомнить о закрытии', type: ApplicationCommandType.Message },
@@ -538,6 +544,13 @@ client.on('messageCreate', async msg => {
             console.log(`[LOG] !подтвердить от ${msg.author.tag}`);
             console.log(`[LOG] Контракт: ${targetMsg.embeds[0]?.title || 'неизвестно'}`);
 
+            // [!] Удаляем отметки об оплате для этого контракта
+            const contractTitle = targetMsg.embeds[0]?.title || 'Неизвестный контракт';
+            const deletedMarkers = db.prepare('DELETE FROM paid_markers WHERE contractTitle = ?').run(contractTitle);
+            if (deletedMarkers.changes > 0) {
+                console.log(`[DB] Удалены отметки оплаты для контракта "${contractTitle}" (${deletedMarkers.changes} шт.)`);
+            }
+
             let totalPaid = 0;
             targetMsg.embeds[0].fields.forEach(field => {
                 const amount = parseInt(field.value.replace(/\D/g, '')) || 0;
@@ -568,8 +581,8 @@ client.on('messageCreate', async msg => {
 
                 // Формируем подробное сообщение
                 const embed = targetMsg.embeds[0];
-                const contractTitle = embed?.title || 'Неизвестный контракт';
-                let details = `📋 **${contractTitle}**\n`;
+                const contractTitle2 = embed?.title || 'Неизвестный контракт';
+                let details = `📋 **${contractTitle2}**\n`;
                 if (embed && embed.fields && embed.fields.length > 0) {
                     embed.fields.forEach(field => {
                         const amountMatch = field.value.match(/([\d, ]+)\s*\$?/);
@@ -671,6 +684,12 @@ client.on('interactionCreate', async i => {
                 }
 
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
+
+                // [!] Удаляем отметки об оплате для этого контракта
+                const deletedMarkers = db.prepare('DELETE FROM paid_markers WHERE contractTitle = ?').run(oldEmbed.title);
+                if (deletedMarkers.changes > 0) {
+                    console.log(`[DB] Удалены отметки оплаты для контракта "${oldEmbed.title}" (${deletedMarkers.changes} шт.)`);
+                }
 
                 db.prepare('INSERT INTO contract_history (msgId, title, status, closedAt) VALUES (?, ?, ?, ?)')
                     .run(msgId, oldEmbed.title, 'closed', Date.now());
@@ -1064,7 +1083,7 @@ client.on('interactionCreate', async i => {
                 return;
             }
 
-            // ---- Обработка команды /отметить_оплачено (списывает долг, НЕ добавляет в казну) ----
+            // ---- Обработка команды /отметить_оплачено (ТОЛЬКО отметка, БЕЗ списания) ----
             if (i.commandName === 'отметить_оплачено') {
                 const nick = i.options.getString('ник');
                 const contractTitle = i.options.getString('контракт');
@@ -1083,20 +1102,49 @@ client.on('interactionCreate', async i => {
                     });
                 }
                 
-                // Добавляем отметку
+                // Добавляем только отметку, НЕ списываем из debtors
                 db.prepare(`
                     INSERT INTO paid_markers (debtorName, contractTitle, amount, markedBy, createdAt)
                     VALUES (?, ?, ?, ?, ?)
                 `).run(nick, contractTitle, amount, i.user.id, Date.now());
                 
-                // [!] СПИСЫВАЕМ ДОЛГ ИЗ DEBTORS
-                deductDebt(nick, amount);
-                
-                // [!] НЕ ДОБАВЛЯЕМ В КАЗНУ!
-                // Нет db.prepare('UPDATE treasury SET balance = balance + ? WHERE id = 1').run(amount);
+                // [!] НЕ СПИСЫВАЕМ! Только отметка
+                // deductDebt(nick, amount); // <-- УБРАНО!
                 
                 await i.reply({ 
-                    content: `✅ Отметка об оплате для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ добавлена! Долг списан.`,
+                    content: `✅ Отметка об оплате для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ добавлена!`,
+                    flags: [MessageFlags.Ephemeral] 
+                });
+                return;
+            }
+
+            // ---- Обработка команды /убрать_отметку ----
+            if (i.commandName === 'убрать_отметку') {
+                const nick = i.options.getString('ник');
+                const contractTitle = i.options.getString('контракт');
+                const amount = i.options.getInteger('сумма');
+                
+                // Проверяем, есть ли отметка
+                const existing = db.prepare(`
+                    SELECT 1 FROM paid_markers 
+                    WHERE debtorName = ? AND contractTitle = ? AND amount = ?
+                `).get(nick, contractTitle, amount);
+                
+                if (!existing) {
+                    return i.reply({ 
+                        content: `❌ Отметка для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ не найдена.`,
+                        flags: [MessageFlags.Ephemeral] 
+                    });
+                }
+                
+                // Удаляем отметку
+                db.prepare(`
+                    DELETE FROM paid_markers 
+                    WHERE debtorName = ? AND contractTitle = ? AND amount = ?
+                `).run(nick, contractTitle, amount);
+                
+                await i.reply({ 
+                    content: `✅ Отметка об оплате для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ удалена.`,
                     flags: [MessageFlags.Ephemeral] 
                 });
                 return;
@@ -1197,7 +1245,7 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: '✅ Статистика выведена в логи.', flags: [MessageFlags.Ephemeral] });
             }
 
-            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают (должники с 0 долгом исчезают) ----
+            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают ----
             if (i.commandName === 'ожидают') {
                 let text = `📋 **Ожидают оплаты**\n\n`;
 
@@ -1474,6 +1522,12 @@ client.on('interactionCreate', async i => {
                 }
 
                 db.prepare('DELETE FROM active_contracts WHERE msgId = ?').run(msgId);
+
+                // [!] Удаляем отметки об оплате для этого контракта
+                const deletedMarkers = db.prepare('DELETE FROM paid_markers WHERE contractTitle = ?').run(oldEmbed.title);
+                if (deletedMarkers.changes > 0) {
+                    console.log(`[DB] Удалены отметки оплаты для контракта "${oldEmbed.title}" (${deletedMarkers.changes} шт.)`);
+                }
 
                 const existingHistory = db.prepare('SELECT 1 FROM contract_history WHERE msgId = ?').get(msgId);
                 if (!existingHistory) {
