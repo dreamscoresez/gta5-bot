@@ -1197,7 +1197,7 @@ client.on('interactionCreate', async i => {
                 return i.reply({ content: '✅ Статистика выведена в логи.', flags: [MessageFlags.Ephemeral] });
             }
 
-            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают ----
+            // ---- ОБНОВЛЁННАЯ КОМАНДА /ожидают (должники с 0 долгом исчезают) ----
             if (i.commandName === 'ожидают') {
                 let text = `📋 **Ожидают оплаты**\n\n`;
 
@@ -1264,37 +1264,48 @@ client.on('interactionCreate', async i => {
                     // [!] Сортируем должников по алфавиту
                     const sortedDebtors = Array.from(allDebtors.entries()).sort((a, b) => a[0].localeCompare(b[0]));
                     
-                    text += `👥 **Все должники (${sortedDebtors.length} чел.):**\n`;
+                    // [!] Считаем количество должников с долгом > 0
+                    let activeDebtors = 0;
                     for (const [name, debts] of sortedDebtors) {
                         const total = debts.debtors + debts.overdue + debts.critical;
-                        
-                        // [!] Проверяем, есть ли отметки об оплате для этого должника
-                        if (debts.paidMarkers.length > 0) {
-                            // Если есть отметки, показываем только те суммы, которые не отмечены как оплаченные
-                            let remainingDebt = total;
-                            let paidInfo = [];
-                            debts.paidMarkers.forEach(m => {
-                                remainingDebt -= m.amount;
-                                paidInfo.push(`${m.amount.toLocaleString()}$ (${m.contractTitle}) ✅`);
-                            });
+                        if (total > 0) activeDebtors++;
+                    }
+                    
+                    if (activeDebtors === 0) {
+                        text += '👥 Должников нет\n';
+                    } else {
+                        text += `👥 **Все должники (${activeDebtors} чел.):**\n`;
+                        for (const [name, debts] of sortedDebtors) {
+                            const total = debts.debtors + debts.overdue + debts.critical;
                             
-                            if (remainingDebt > 0) {
+                            // [!] Пропускаем, если долг = 0
+                            if (total === 0) continue;
+                            
+                            // [!] Проверяем, есть ли отметки об оплате для этого должника
+                            if (debts.paidMarkers.length > 0) {
+                                // Если есть отметки, показываем только те суммы, которые не отмечены как оплаченные
+                                let remainingDebt = total;
+                                let paidInfo = [];
+                                debts.paidMarkers.forEach(m => {
+                                    remainingDebt -= m.amount;
+                                    paidInfo.push(`${m.amount.toLocaleString()}$ (${m.contractTitle}) ✅`);
+                                });
+                                
+                                if (remainingDebt > 0) {
+                                    let parts = [];
+                                    if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
+                                    if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
+                                    if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
+                                    text += `   • **${name}**: ${remainingDebt.toLocaleString()} $ (${parts.join(', ')}) — Оплачено: ${paidInfo.join(', ')}\n`;
+                                }
+                            } else {
+                                // Нет отметок об оплате - показываем как обычно
                                 let parts = [];
                                 if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
                                 if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
                                 if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
-                                text += `   • **${name}**: ${remainingDebt.toLocaleString()} $ (${parts.join(', ')}) — Оплачено: ${paidInfo.join(', ')}\n`;
-                            } else {
-                                // Если весь долг оплачен, показываем с пометкой
-                                text += `   • ~~**${name}**~~: ~~${total.toLocaleString()} $~~ ✅ **ВСЁ ОПЛАЧЕНО!** (${paidInfo.join(', ')})\n`;
+                                text += `   • **${name}**: ${total.toLocaleString()} $ (${parts.join(', ')})\n`;
                             }
-                        } else {
-                            // Нет отметок об оплате - показываем как обычно
-                            let parts = [];
-                            if (debts.debtors > 0) parts.push(`обычный ${debts.debtors.toLocaleString()}$`);
-                            if (debts.overdue > 0) parts.push(`просрочка ${debts.overdue.toLocaleString()}$`);
-                            if (debts.critical > 0) parts.push(`крит ${debts.critical.toLocaleString()}$`);
-                            text += `   • **${name}**: ${total.toLocaleString()} $ (${parts.join(', ')})\n`;
                         }
                     }
                 } else {
