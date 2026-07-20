@@ -239,7 +239,7 @@ const commands = [
         .addStringOption(o => o.setName('участники').setDescription('Ники участников через ;').setRequired(true)),
     new SlashCommandBuilder()
         .setName('отметить_оплачено')
-        .setDescription('Отметить долг как оплаченный (только для отображения в /ожидают)')
+        .setDescription('Отметить долг как оплаченный (списывает из debtors)')
         .addStringOption(o => o.setName('ник').setDescription('Ник должника').setRequired(true))
         .addStringOption(o => o.setName('контракт').setDescription('Название контракта').setRequired(true))
         .addIntegerOption(o => o.setName('сумма').setDescription('Сумма долга').setRequired(true)),
@@ -1064,7 +1064,7 @@ client.on('interactionCreate', async i => {
                 return;
             }
 
-            // ---- Обработка команды /отметить_оплачено ----
+            // ---- Обработка команды /отметить_оплачено (обновлена) ----
             if (i.commandName === 'отметить_оплачено') {
                 const nick = i.options.getString('ник');
                 const contractTitle = i.options.getString('контракт');
@@ -1089,8 +1089,11 @@ client.on('interactionCreate', async i => {
                     VALUES (?, ?, ?, ?, ?)
                 `).run(nick, contractTitle, amount, i.user.id, Date.now());
                 
+                // [!] СПИСЫВАЕМ ДОЛГ ИЗ DEBTORS
+                deductDebt(nick, amount);
+                
                 await i.reply({ 
-                    content: `✅ Отметка об оплате для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ добавлена!`,
+                    content: `✅ Отметка об оплате для **${nick}** по контракту **"${contractTitle}"** на сумму ${amount.toLocaleString()} $ добавлена! Долг списан.`,
                     flags: [MessageFlags.Ephemeral] 
                 });
                 return;
